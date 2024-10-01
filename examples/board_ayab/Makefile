@@ -31,7 +31,6 @@ LDFLAGS += -lpthread
 
 all: obj ${target} 
 
-include ../Makefile.opengl
 include ${simavr}/Makefile.common
 
 board = ${OBJ}/${target}.elf

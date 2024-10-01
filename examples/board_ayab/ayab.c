@@ -227,6 +227,7 @@ static void * avr_run_thread(void * param)
             switch (event)
             {
                 case CARRIAGE_LEFT:
+                    fprintf(stderr, "moving carriage left\n");
                     new_phase = (encoder_phase-1)%16;
                     if ((new_phase%4) == 0) {
                         if (machine.carriage.position > -24) {
@@ -238,6 +239,7 @@ static void * avr_run_thread(void * param)
                     }
                     break;
                 case CARRIAGE_RIGHT:
+                    fprintf(stderr, "moving carriage right\n");
                     new_phase = (encoder_phase+1)%16;
                     if ((new_phase%4) == 0) {
                         if (machine.carriage.position < 224) {
@@ -249,7 +251,7 @@ static void * avr_run_thread(void * param)
                     }
                     break;
                 default:
-                    fprintf(stderr, "Unexpect event from graphic thread\n");
+                    fprintf(stderr, "Unexpected event from UI thread\n");
                     break;
             }
 
@@ -448,7 +450,7 @@ int main(int argc, char *argv[])
     // Beeper not implemented (simavr lacks PWM support)
 
     // Start display 
-    printf( "\nsimavr launching ('q' to quit):\n");
+    printf( "\nsimavr launching ('q' to quit, 'h'/'l' to move carriage):\n");
 
     ayab_display(argc, argv, avr_run_thread, &machine, &shield);
 
