@@ -1,6 +1,8 @@
 /*
 	i2c_mcp23008_virt.c
 
+	Derived from an example file in simavr:
+
 	Copyright 2008, 2009 Michel Pollet <buserror@gmail.com>
 
  	This file is part of simavr.

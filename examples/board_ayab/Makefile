@@ -1,4 +1,6 @@
 # 
+#	Derived from an example file in simavr:
+#
 # 	Copyright 2008-2012 Michel Pollet <buserror@gmail.com>
 #
 #	This file is part of simavr.
