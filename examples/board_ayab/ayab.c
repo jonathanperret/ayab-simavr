@@ -29,6 +29,7 @@
 #include "avr_adc.h"
 #include "avr_twi.h"
 #include "sim_elf.h"
+#include "sim_hex.h"
 #include "sim_gdb.h"
 #include "uart_pty.h"
 #include "queue.h"
@@ -86,7 +87,7 @@ display_usage(
      "       [--carriage|-c <carriage>] Select K/L/G carriage (default=K)\n"
      "       [--beltphase|-b <phase>]   Select Regular/Shifted (default=Regular)\n"
      "       [--startside|-s <side>]    Select Left/Right side to start (default=Left)\n"
-	 "       <firmware>          An ELF file (can include debugging syms)\n"
+        "       <firmware>          An ELF or HEX file (can include debugging syms)\n"
      "\n");
 	exit(1);
 }
@@ -171,13 +172,11 @@ parse_arguments(int argc, char *argv[])
             } else {
 				display_usage(basename(argv[0]));
             }
-		} else if (argv[pi][0] != '-') {
-            if (elf_read_firmware(argv[pi], &firmware) == -1) {
-                fprintf(stderr, "%s: Unable to load firmware from file %s\n",
-                        argv[0], argv[pi]);
-                exit(1);
-            }
-            printf ("%s loaded (f=%d mmcu=%s)\n", argv[pi], (int) firmware.frequency, firmware.mmcu);
+        }
+        else if (argv[pi][0] != '-')
+        {
+            sim_setup_firmware(argv[pi], AVR_SEGMENT_OFFSET_FLASH, &firmware, argv[0]);
+            printf("%s loaded (f=%d mmcu=%s)\n", argv[pi], (int)firmware.frequency, firmware.mmcu);
         }
     }
 }
