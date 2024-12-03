@@ -314,6 +314,10 @@ static void * avr_run_thread(void * param)
                 unsigned new_phase = encoder_phase;
                 switch (event)
                 {
+                    case RESET_ARDUINO:
+                        fprintf(stderr, "Resetting Arduino\n");
+                        avr_reset(avr);
+                        break;
                     case CARRIAGE_LEFT:
                         new_phase = (encoder_phase-1)%64;
                         if ((new_phase%4) == 0) {
