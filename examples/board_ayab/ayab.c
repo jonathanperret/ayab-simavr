@@ -30,6 +30,7 @@
 #include "avr_ioport.h"
 #include "avr_adc.h"
 #include "avr_twi.h"
+#include "avr_extint.h"
 #include "sim_elf.h"
 #include "sim_hex.h"
 #include "sim_gdb.h"
@@ -246,6 +247,12 @@ static void * avr_run_thread(void * param)
 #if AVR_STACK_WATCH
     uint16_t SP_min = (avr->data[R_SPH]<<8) +  avr->data[R_SPL];
 #endif
+
+    // This makes emulation slightly faster (and more significantly, more regular)
+    // by avoiding a repeated check for level-triggered interrupts
+    // (which AYAB does't use anyway) when Arduino pins 2 or 3 are set to low.
+    avr_extint_set_strict_lvl_trig(avr, 0, 0);
+    avr_extint_set_strict_lvl_trig(avr, 1, 0);
 
     // Initialize VCD for PC-only traces
     if (!avr->vcd && (trace_pc || trace_machine)) {
