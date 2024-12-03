@@ -6,6 +6,7 @@ enum event_type {
     CARRIAGE_LEFT,
     CARRIAGE_RIGHT,
     VCD_DUMP,
+    RESET_ARDUINO,
 };
 
 typedef struct {
