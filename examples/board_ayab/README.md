@@ -15,10 +15,14 @@ Usage: ayab.elf [...] <firmware>
        [--freq|-f <freq>]  Sets the frequency for an .hex firmware
        [--mcu|-m <device>] Sets the MCU type for an .hex firmware
        [--gdb|-g [<port>]] Listen for gdb connection on <port> (default 1234)
-       [--machine|-m <machine>]   Select KH910/KH930 machine (default=KH910)
-       [--carriage|-c <carriage>] Select K/L/G carriage (default=K)
-       [--beltphase|-b <phase>]   Select Regular/Shifted (default=Regular)
-       [--startside|-s <side>]    Select Left/Right side to start (default=Left)
+       [--output|-o <file>] VCD file to save signal traces
+       [--start-vcd|-s     Start VCD output from reset
+       [--pc-trace|-p      Add PC to VCD traces
+       [--machine-trace]   Add Machine states to VCD traces
+       [--machine <machine>]   Select KH910/KH930/KH270 machine (default=KH910)
+       [--carriage <carriage>] Select K/L/G carriage (default=K)
+       [--beltphase <phase>]   Select Regular/Shifted (default=Regular)
+       [--startside <side>]    Select Left/Right side to start (default=Left)
        <firmware>          An ELF file (can include debugging syms)
 ```
 
