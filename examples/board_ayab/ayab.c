@@ -401,7 +401,6 @@ static void * avr_run_thread(void * param)
                 machine.hall_left = 1650;
                 machine.hall_right = 1650;
                 uint16_t solenoid_states = (shield.mcp23008[1].reg[MCP23008_REG_OLAT] << 8) + shield.mcp23008[0].reg[MCP23008_REG_OLAT]; 
-                int solenoid_update = 0;
                 int selected_needle;
                 int select_offset = 0;
                 switch (machine.carriage.type) {
@@ -518,7 +517,6 @@ static void * avr_run_thread(void * param)
                     }
 
                     needles[selected_needle] = solenoid_states & (1<< solenoid_index) ? '.' : '|';
-                    solenoid_update = 1;
                 }
 
                 avr_raise_irq(encoder_v2.irq + IRQ_BUTTON_OUT, (phase_map[encoder_phase % 4] & 1) ? 1 : 0);
@@ -546,13 +544,11 @@ static void * avr_run_thread(void * param)
                     if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
                         beeper_history_add(' ');
 
-                    if (solenoid_update != 0) {
-                        fprintf(stderr, "<- %.*s\n", half_num_needles, needles);
-                        fprintf(stderr, "   %.*s\n", half_num_needles, info_buffer);
+                    fprintf(stderr, "<- %.*s\n", half_num_needles, needles);
+                    fprintf(stderr, "   %.*s\n", half_num_needles, info_buffer);
 
-                        fprintf(stderr, "-> %.*s\n", half_num_needles, needles+half_num_needles);
-                        fprintf(stderr, "   %.*s\n", half_num_needles, info_buffer+half_num_needles);
-                    }
+                    fprintf(stderr, "-> %.*s\n", half_num_needles, needles+half_num_needles);
+                    fprintf(stderr, "   %.*s\n", half_num_needles, info_buffer+half_num_needles);
                 }
 
                 // Trigger IRQ for machine internal data
