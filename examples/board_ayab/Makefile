@@ -31,12 +31,14 @@ LDFLAGS += -lpthread
 
 all: obj ${target} 
 
-include ../Makefile.opengl
+# include ../Makefile.opengl
 include ${simavr}/Makefile.common
 
 board = ${OBJ}/${target}.elf
 
-${board} : ${OBJ}/${target}.o ${OBJ}/${target}_display.o ${OBJ}/queue.o
+${board} : ${OBJ}/${target}.o ${OBJ}/queue.o
+# ${board} : ${OBJ}/${target}_display.o
+${board} : ${OBJ}/${target}_term.o
 ${board} : ${OBJ}/button.o
 ${board} : ${OBJ}/uart_pty.o
 ${board} : ${OBJ}/i2c_mcp23008_virt.o

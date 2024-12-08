@@ -15,12 +15,15 @@ typedef struct {
     struct {
         enum event_type  type;
         int         value;
-    } items[8];
+    } items[16];
 } event_queue_t;
 
 extern event_queue_t event_queue;
 
 int queue_push(event_queue_t *queue, enum event_type type, int value);
 int queue_pop(event_queue_t *queue, enum event_type *type, int *value);
+
+int is_queue_empty(event_queue_t *queue);
+int is_queue_full(event_queue_t *queue);
 
 #endif
