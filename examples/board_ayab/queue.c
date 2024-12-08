@@ -28,4 +28,15 @@ int queue_pop(event_queue_t *queue, enum event_type *type, int *value) {
     return 1;
 }
 
+int is_queue_empty(event_queue_t *queue)
+{
+    return queue->index_read == queue->index_write;
+}
+
+int is_queue_full(event_queue_t *queue)
+{
+    int index_write_next = (queue->index_write + 1) % ARRAY_SIZE(queue->items);
+
+    return (index_write_next == queue->index_read);
+}
 
