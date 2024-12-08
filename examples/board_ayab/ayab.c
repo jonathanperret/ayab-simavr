@@ -64,6 +64,10 @@ avr_irq_t *adcbase_irq;
 
 extern avr_kind_t *avr_kind[];
 
+// analogWrite() stores the PWM duty cycle for pin 9 in that register
+#define OCR1A 0x88
+#define PORTB 0x25
+
 static void
 list_cores()
 {
@@ -205,6 +209,42 @@ parse_arguments(int argc, char *argv[])
             printf ("%s loaded (f=%d mmcu=%s)\n", argv[pi], (int) firmware.frequency, firmware.mmcu);
         }
     }
+}
+
+void beeper_history_add(char c) {
+    memmove(shield.beeper_history, shield.beeper_history + 1, sizeof(shield.beeper_history) - 1);
+    shield.beeper_history[sizeof(shield.beeper_history) - 1] = c;
+}
+
+void beeper_set_value(int value) {
+    // fprintf(stderr, "beeper at %d\n", value);
+    beeper_history_add(value == 0 ? '^' : (value == 255 ? ' ' : '_'));
+}
+
+void
+beeper_write(
+		struct avr_t * avr,
+		avr_io_addr_t addr,
+		uint8_t v,
+		void * param)
+{
+    switch (addr) {
+        case OCR1A:
+            beeper_set_value(v);
+            break;
+        case PORTB:
+            beeper_set_value((v & (1 << PIN_BEEPER_INDEX)) ? 255 : 0);
+            break;
+
+    }
+}
+
+/*
+ * called when the AVR changes beeper pin status
+ */
+void beeper_digital_write(struct avr_irq_t * irq, uint32_t value, void * _param)
+{
+    beeper_set_value(value ? 255: 0);
 }
 
 /* Callback for A-D conversion sampling. */
@@ -501,7 +541,10 @@ static void * avr_run_thread(void * param)
                     for (int i=15; i>=0;i--) {
                         fprintf(stderr, "%c", solenoid_states & (1<<i) ? '.' : '|');
                     }
-                    fprintf(stderr, "], Carriage = %3d, BP = %d, Sensors = (%4d, %4d)\n", machine.carriage.position, (encoder_phase >> 5), machine.hall_left, machine.hall_right);
+                    fprintf(stderr, "], Carriage = %3d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n", machine.carriage.position,
+                        (encoder_phase >> 5), machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
+                    if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
+                        beeper_history_add(' ');
 
                     if (solenoid_update != 0) {
                         fprintf(stderr, "<- %.*s\n", half_num_needles, needles);
@@ -637,6 +680,17 @@ int main(int argc, char *argv[])
         avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('D'), PIN_LED_B),
         port_d_changed_hook, 
         NULL);
+
+    // BEEPER
+    // - to work around simavr's lack of "phase correct PWM" support,
+    //   we just watch the OCR1A register that analogWrite() sets
+    avr_register_io_write(avr, OCR1A, beeper_write, NULL);
+    // - analogWrite() does a digitalWrite() for values of 0 and 255
+    //   so we also watch PORTB
+    avr_register_io_write(avr, PORTB, beeper_write, NULL);
+
+    memset(shield.beeper_history, '_', sizeof(shield.beeper_history));
+
     // Encoder v1 & v2
     button_init(avr, &encoder_v1, "Encoder v1");
     avr_connect_irq(
@@ -657,8 +711,6 @@ int main(int argc, char *argv[])
     // ADC (hall sensors)
     adcbase_irq = avr_io_getirq(avr, AVR_IOCTL_ADC_GETIRQ, 0);
     avr_irq_register_notify(adcbase_irq + ADC_IRQ_OUT_TRIGGER, adcTriggerCB, NULL);
-
-    // Beeper not implemented (simavr lacks PWM support)
 
     // Start display 
     printf( "\nsimavr launching\n");

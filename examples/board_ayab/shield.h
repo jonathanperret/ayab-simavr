@@ -8,12 +8,15 @@
 #define PIN_BP 4
 #define PIN_LED_A 5
 #define PIN_LED_B 6
+#define PIN_BEEPER_PORT 'B'
+#define PIN_BEEPER_INDEX 1
 
 #define PIN_HALL_RIGHT ADC_IRQ_ADC0
 #define PIN_HALL_LEFT  ADC_IRQ_ADC1
 
 typedef struct {
     int led[2];
+    char beeper_history[16];
     i2c_mcp23008_t mcp23008[2];
 } shield_t;
 
