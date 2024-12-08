@@ -537,8 +537,8 @@ static void * avr_run_thread(void * param)
                         info_buffer[machine.carriage.position] = '^';
                     }
 
-                    fprintf(stderr, "Solenoids =[");
-                    for (int i=15; i>=0;i--) {
+                    fprintf(stderr, "S=[");
+                    for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
                         fprintf(stderr, "%c", solenoid_states & (1<<i) ? '.' : '|');
                     }
                     fprintf(stderr, "], Carriage = %3d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n", machine.carriage.position,
