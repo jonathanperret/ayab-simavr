@@ -5,6 +5,8 @@
 #define HALL_VALUE_IDLE  400
 #define HALL_VALUE_SOUTH 100
 
+#define BELT_PHASE_ADVANCE 8
+
 enum side {LEFT, RIGHT};
 enum machine_type {KH910, KH930, KH270};
 enum carriage_type {KNIT, LACE, GARTER, KNIT270};
