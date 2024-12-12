@@ -326,25 +326,11 @@ static void * avr_run_thread(void * param)
     // {v1, v2} encoding over 4 phases
     unsigned phase_map[4] = {0, 1, 3, 2};
 
-    // Phase has 64 states (16 needles/solenoids *4 v1/v2 states)
-    // Belt at position 1/9 is aligned on the left side with K/L, "regular"/"Shifted"
-    unsigned encoder_phase;
-    if (machine.belt_phase == REGULAR) {
-       encoder_phase = (unsigned)((machine.carriage.position + 1) * 4) % 64;
-    } else {
-       encoder_phase = (unsigned)((machine.carriage.position + 9) * 4) % 64;
-    }
-    if (machine.carriage.type == LACE) {
-        // Lace center is shifted by 4 to the left
-        encoder_phase += -4 * 4;
-    } else if (machine.carriage.type == GARTER) {
-        // Garter center has BP inverted (8 needles offset)
-        encoder_phase += 8 * 4;
-    }
-    // Adjust encoder_phase when starting from the right to (position+1) * 4 -1
-    if (machine.start_side == RIGHT) {
-        encoder_phase+=3;
-    }
+    // encoder_phase has 4 states per solenoid, i.e. the camshaft
+    // does a complete revolution in <solenoid count> * 4 steps.
+    // We define encoder_phase to be 0 when the first cam (connected to
+    // solenoid 0) is in side-pushing position.
+    unsigned encoder_phase = 0;
 
     char needles[machine.num_needles];
     memset(needles, '.', machine.num_needles);
@@ -369,10 +355,10 @@ static void * avr_run_thread(void * param)
                     case CARRIAGE_LEFT:
                         new_phase = (encoder_phase-1)%64;
                         if ((new_phase%4) == 3) {
-                            if (machine.carriage.position > -28) {
+                            if (machine.carriage.position > -MARGIN_NEEDLES) {
                                 machine.carriage.position--;
                             } else {
-                                machine.carriage.position = -28;
+                                machine.carriage.position = -MARGIN_NEEDLES;
                                 new_phase = encoder_phase;
                             }
                         }
@@ -380,10 +366,10 @@ static void * avr_run_thread(void * param)
                     case CARRIAGE_RIGHT:
                         new_phase = (encoder_phase+1)%64;
                         if ((new_phase%4) == 0) {
-                            if (machine.carriage.position < (machine.num_needles + 28)) {
+                            if (machine.carriage.position < (machine.num_needles + MARGIN_NEEDLES - 1)) {
                                 machine.carriage.position++;
                             } else {
-                                machine.carriage.position = (machine.num_needles + 28);
+                                machine.carriage.position = (machine.num_needles + MARGIN_NEEDLES - 1);
                                 new_phase = encoder_phase;
                             }
                         }
@@ -674,10 +660,45 @@ int main(int argc, char *argv[])
         machine.carriage.type = KNIT270;
     }
 
-    if (machine.start_side == LEFT) {
-        machine.carriage.position = -28;
-    } else {
-        machine.carriage.position = machine.num_needles + 28;
+    // Set carriage position so that encoder phase is 0
+    // when left needle selector is at needle 0
+    // (in regular belt shift)
+    switch (machine.carriage.type) {
+        case KNIT:
+            machine.carriage.position = 24;
+            break;
+        case LACE:
+            machine.carriage.position = 12;
+            break;
+        case GARTER:
+            machine.carriage.position = 0;
+            break;
+        case KNIT270:
+            machine.carriage.position = 15;
+            break;
+        default:
+            abort();
+    }
+    // Shift carriage by half-solenoid count if alternate belt engagement is used
+    if (machine.belt_phase == SHIFTED) {
+        machine.carriage.position += machine.num_solenoids / 2;
+    }
+    
+    // Move carriage to starting side, preserving phase
+    int newpos;
+    switch (machine.start_side) {
+        case LEFT:
+            while ((newpos = machine.carriage.position - machine.num_solenoids) >= -MARGIN_NEEDLES) {
+                machine.carriage.position = newpos;
+            }
+            break;
+        case RIGHT:
+            while ((newpos = machine.carriage.position + machine.num_solenoids) < machine.num_needles + MARGIN_NEEDLES) {
+                machine.carriage.position = newpos;
+            }
+            break;
+        default:
+            abort();
     }
 
 	avr = avr_make_mcu_by_name(firmware.mmcu);
