@@ -388,6 +388,30 @@ static void * avr_run_thread(void * param)
                 machine.hall_left = 1650;
                 machine.hall_right = 1650;
                 uint16_t solenoid_states = (shield.mcp23008[1].reg[MCP23008_REG_OLAT] << 8) + shield.mcp23008[0].reg[MCP23008_REG_OLAT]; 
+
+                // half-"width" of the pushing-down part of the circular cams
+                const int PUSHER_HALFWIDTH_ON = 8;
+                const int PUSHER_HALFWIDTH_OFF = 16;
+
+                for (int i=0; i<16; i++) {
+                    uint16_t mask = (1 << i);
+                    int solenoid_state = solenoid_states & mask;
+                    // Solenoid 0 is at angle 0 (side-pushing) when encoder_phase is 0
+                    // -> angle from down-pusher is 32.
+                    // Solenoid 1 is at angle 0 (side-pushing) when encoder_phase is 4.
+                    int angle_from_pusher = abs(((int)encoder_phase + (16 - i) * 4) % 64 - 32);
+                    // The solenoid can:
+                    //  - pull the armature down when angle from cam's down-pusher is small enough
+                    //    (approx. 20 degrees on either side)
+                    //  - release the armature at any point, but if more than ~100 degrees away from pusher,
+                    //    the lever will not start riding the cam's side-pusher until the next cycle.
+                    // In other conditions, the lever will behave as if the solenoid had not changed state.
+                    if (angle_from_pusher <= PUSHER_HALFWIDTH_ON || (angle_from_pusher <= PUSHER_HALFWIDTH_OFF && !solenoid_state)) {
+                        // fprintf(stderr, "phase=%d, copying bit %d\n", encoder_phase, i);
+                        machine.armature_states = (machine.armature_states & ~mask) | solenoid_state;
+                    }
+                }
+
                 int selected_needle;
                 int select_offset = 0;
                 switch (machine.carriage.type) {
@@ -503,7 +527,7 @@ static void * avr_run_thread(void * param)
                             break;
                     }
 
-                    needles[selected_needle] = solenoid_states & (1<< solenoid_index) ? '.' : '|';
+                    needles[selected_needle] = machine.armature_states & (1<< solenoid_index) ? '.' : '|';
                 }
 
                 avr_raise_irq(encoder_v2.irq + IRQ_BUTTON_OUT, (phase_map[encoder_phase % 4] & 1) ? 1 : 0);
@@ -529,7 +553,20 @@ static void * avr_run_thread(void * param)
                         beltPhase, machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
                 if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
                     beeper_history_add(' ');
-                fprintf(stderr, "%.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
+                fprintf(stderr, "A=[");
+                for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
+                    if ((machine.armature_states ^ machine.previous_armature_states) & (1 << i)) {
+                        fprintf(stderr, "\x1b[7m");
+                    }
+
+                    int angle_from_pusher = abs(((int)encoder_phase + (16 - i) * 4) % 64 - 32);
+                    if (angle_from_pusher <= PUSHER_HALFWIDTH_OFF) {
+                        fprintf(stderr, angle_from_pusher <= PUSHER_HALFWIDTH_ON ? "\x1b[9m" : "\x1b[4m");
+                    }
+                    fprintf(stderr, "%c\x1b[0m", machine.armature_states & (1<<i) ? '.' : '|');
+                }
+                fprintf(stderr, "] %.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
+                machine.previous_armature_states = machine.armature_states;
 
                 char needle_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
                 char carriage_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
