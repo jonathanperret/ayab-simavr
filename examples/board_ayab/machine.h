@@ -28,6 +28,8 @@ typedef struct {
     int belt_phase;
     int hall_left, hall_right;
     uint16_t solenoid_states;
+    uint16_t armature_states;
+    uint16_t previous_armature_states;
 } machine_t;
 
 #endif
