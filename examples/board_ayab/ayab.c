@@ -522,7 +522,10 @@ static void * avr_run_thread(void * param)
 
                 avr_raise_irq(encoder_v2.irq + IRQ_BUTTON_OUT, (phase_map[encoder_phase % 4] & 1) ? 1 : 0);
                 avr_raise_irq(encoder_v1.irq + IRQ_BUTTON_OUT, (phase_map[encoder_phase % 4] & 2) ? 1 : 0);
-                avr_raise_irq(encoder_beltPhase.irq + IRQ_BUTTON_OUT, (encoder_phase & 32) ? 1 : 0);
+
+                // Belt phase signal is slightly early compared to encoder phase
+                int beltPhase = ((encoder_phase + BELT_PHASE_ADVANCE) % (machine.num_solenoids * 4) > (machine.num_solenoids * 2)) ? 0 : 1;
+                avr_raise_irq(encoder_beltPhase.irq + IRQ_BUTTON_OUT, beltPhase);
 
                 if ((encoder_phase % 4) == 0) {
                     int half_num_needles = machine.num_needles / 2;
