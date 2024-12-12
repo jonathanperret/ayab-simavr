@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <libgen.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "sim_avr.h"
 #include "sim_time.h"
@@ -539,6 +540,7 @@ static void * avr_run_thread(void * param)
                     for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
                         fprintf(stderr, "%c", solenoid_states & (1<<i) ? '.' : '|');
                     }
+                    fprintf(stderr, "] %.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
                     fprintf(stderr, "], Carriage = %3d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n", machine.carriage.position,
                         (encoder_phase >> 5), machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
                     if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
@@ -579,6 +581,54 @@ static void * avr_run_thread(void * param)
     }
 
 	return NULL;
+}
+
+static void slip_print(slipmsg_t *msg);
+
+static void slip_history_add(char c) {
+	memmove(shield.slip_history, shield.slip_history + 1, sizeof(shield.slip_history) - 1);
+	shield.slip_history[sizeof(shield.slip_history) - 1] = c;
+}
+
+static void slip_print(slipmsg_t *msg) {
+	slip_history_add(msg->prefix);
+	slip_history_add(' ');
+	for (int i = 0; i < msg->len; i++)
+	{
+		if (isprint(msg->buf[i]))
+		{
+			slip_history_add(msg->buf[i]);
+		}
+		else
+		{
+			char s[5];
+			snprintf(s, sizeof(s), "\\%02x", msg->buf[i]);
+			slip_history_add(s[0]);
+			slip_history_add(s[1]);
+			slip_history_add(s[2]);
+		}
+	};
+	slip_history_add(' ');
+}
+
+static void slip_add_byte(
+    	struct avr_irq_t *irq,
+		uint32_t value,
+		void * param)
+{
+    slipmsg_t *msg = (slipmsg_t *)param;
+    if (value == 0xc0)
+    {
+        if (msg->len > 0)
+        {
+            slip_print(msg);
+            msg->len = 0;
+        }
+    }
+    else if (msg->len < sizeof(msg->buf))
+    {
+        msg->buf[msg->len++] = value;
+    }
 }
 
 /*
@@ -656,6 +706,14 @@ int main(int argc, char *argv[])
     // Connect uart 0 to a virtual pty
 	uart_pty_init(avr, &uart_pty);
 	uart_pty_connect(&uart_pty, '0');
+
+    // Serial (SLIP) monitor
+    shield.slip_msg_in.prefix = '<';
+    shield.slip_msg_out.prefix = '>';
+	memset(shield.slip_history, ' ', sizeof(shield.slip_history));
+
+    avr_irq_register_notify(uart_pty.irq + IRQ_UART_PTY_BYTE_IN, slip_add_byte, &shield.slip_msg_in);
+    avr_irq_register_notify(uart_pty.irq + IRQ_UART_PTY_BYTE_OUT, slip_add_byte, &shield.slip_msg_out);
 
     // System Hardware Description
     // mcp23008 at 0x20 & 0x21
