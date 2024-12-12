@@ -347,7 +347,7 @@ static void * avr_run_thread(void * param)
     }
 
     char needles[machine.num_needles];
-    memset(needles, ' ', machine.num_needles);
+    memset(needles, '.', machine.num_needles);
 
 	while (*run && (state != cpu_Done) && (state != cpu_Crashed))
     {
