@@ -513,34 +513,46 @@ static void * avr_run_thread(void * param)
                 int beltPhase = ((encoder_phase + BELT_PHASE_ADVANCE) % (machine.num_solenoids * 4) > (machine.num_solenoids * 2)) ? 0 : 1;
                 avr_raise_irq(encoder_beltPhase.irq + IRQ_BUTTON_OUT, beltPhase);
 
-                if ((encoder_phase % 4) == 0) {
-                    int half_num_needles = machine.num_needles / 2;
+                uint16_t previous_solenoid_states = machine.solenoid_states;
+                machine.solenoid_states = solenoid_states;
 
-                    char info_buffer[machine.num_needles];
-                    memset(info_buffer, ' ', machine.num_needles);
-                    if ((selected_needle >=0) && (selected_needle < machine.num_needles)) {
-                        info_buffer[selected_needle]           = 'x';
+                fprintf(stderr, "S=[");
+                for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
+                    if ((solenoid_states ^ previous_solenoid_states) & (1 << i)) {
+                        fprintf(stderr, "\x1b[7m");
                     }
-                    if ((machine.carriage.position >=0) && (machine.carriage.position < machine.num_needles)) {
-                        info_buffer[machine.carriage.position] = '^';
-                    }
-
-                    fprintf(stderr, "S=[");
-                    for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
-                        fprintf(stderr, "%c", solenoid_states & (1<<i) ? '.' : '|');
-                    }
-                    fprintf(stderr, "] %.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
-                    fprintf(stderr, "], Carriage = %3d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n", machine.carriage.position,
-                        (encoder_phase >> 5), machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
-                    if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
-                        beeper_history_add(' ');
-
-                    fprintf(stderr, "<- %.*s\n", half_num_needles, needles);
-                    fprintf(stderr, "   %.*s\n", half_num_needles, info_buffer);
-
-                    fprintf(stderr, "-> %.*s\n", half_num_needles, needles+half_num_needles);
-                    fprintf(stderr, "   %.*s\n", half_num_needles, info_buffer+half_num_needles);
+                    fprintf(stderr, "%c\x1b[0m", solenoid_states & (1<<i) ? '.' : '|');
                 }
+                fprintf(stderr, "], Ph = %d, Pos = %3.2f, BP = %d, Sensors = (%4d, %4d) B=%.*s\n",
+                        encoder_phase,
+                        machine.carriage.position + (encoder_phase % 4) / 4.0,
+                        beltPhase, machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
+                if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
+                    beeper_history_add(' ');
+                fprintf(stderr, "%.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
+
+                char needle_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
+                char carriage_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
+                memset(carriage_buffer, ' ', sizeof(carriage_buffer));
+                memset(needle_buffer, ' ', sizeof(needle_buffer));
+
+                if ((selected_needle >= -MARGIN_NEEDLES) && (selected_needle < machine.num_needles + MARGIN_NEEDLES)) {
+                    carriage_buffer[selected_needle + MARGIN_NEEDLES] = 'x';
+                }
+                if ((machine.carriage.position >= -MARGIN_NEEDLES) && (machine.carriage.position < machine.num_needles + MARGIN_NEEDLES)) {
+                    carriage_buffer[machine.carriage.position + MARGIN_NEEDLES] = '^';
+                }
+
+                int half_num_needles = machine.num_needles / 2;
+                for (int i=0; i < machine.num_needles; i++) {
+                    needle_buffer[MARGIN_NEEDLES + i] = needles[i];
+                }
+                fprintf(stderr, "<- %.*s\n   %.*s\n",
+                        half_num_needles + MARGIN_NEEDLES, needle_buffer,
+                        half_num_needles + MARGIN_NEEDLES, carriage_buffer);
+                fprintf(stderr, "-> %.*s\n   %.*s\n",
+                        half_num_needles + MARGIN_NEEDLES, needle_buffer + half_num_needles + MARGIN_NEEDLES,
+                        half_num_needles + MARGIN_NEEDLES, carriage_buffer + half_num_needles + MARGIN_NEEDLES);
 
                 // Trigger IRQ for machine internal data
                 if (trace_machine) {

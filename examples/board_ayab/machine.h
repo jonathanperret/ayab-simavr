@@ -27,6 +27,7 @@ typedef struct {
     carriage_t carriage;
     int belt_phase;
     int hall_left, hall_right;
+    uint16_t solenoid_states;
 } machine_t;
 
 #endif
