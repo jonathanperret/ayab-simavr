@@ -7,6 +7,8 @@
 
 #define BELT_PHASE_ADVANCE 8
 
+#define MARGIN_NEEDLES 28
+
 enum side {LEFT, RIGHT};
 enum machine_type {KH910, KH930, KH270};
 enum carriage_type {KNIT, LACE, GARTER, KNIT270};
