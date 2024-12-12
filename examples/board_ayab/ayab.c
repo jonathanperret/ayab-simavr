@@ -368,7 +368,7 @@ static void * avr_run_thread(void * param)
                         break;
                     case CARRIAGE_LEFT:
                         new_phase = (encoder_phase-1)%64;
-                        if ((new_phase%4) == 0) {
+                        if ((new_phase%4) == 3) {
                             if (machine.carriage.position > -28) {
                                 machine.carriage.position--;
                             } else {
