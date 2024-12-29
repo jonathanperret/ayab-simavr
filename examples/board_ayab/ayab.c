@@ -54,11 +54,16 @@ int gdb_port = 1234;
 int trace_pc = 0;
 int trace_machine = 0;
 int vcd_enabled = 0;
+int quiet = 0;
 
 uart_pty_t uart_pty;
 
 machine_t machine;
 shield_t shield;
+char test_pattern[201] = "";
+int test_enabled = 0;
+int test_started = 0;
+int test_delay = 0;
 button_t encoder_v1, encoder_v2;
 button_t encoder_beltPhase;
 avr_irq_t *adcbase_irq;
@@ -68,6 +73,10 @@ extern avr_kind_t *avr_kind[];
 // analogWrite() stores the PWM duty cycle for pin 9 in that register
 #define OCR1A 0x88
 #define PORTB 0x25
+
+// half-"width" of the pushing-down part of the circular cams
+const int PUSHER_HALFWIDTH_ON = 8;
+const int PUSHER_HALFWIDTH_OFF = 16;
 
 static void
 list_cores()
@@ -88,22 +97,24 @@ display_usage(
 {
 	printf("Usage: %s [...] <firmware>\n", app);
 	printf(
-	 "       [--help|-h|-?]      Display this usage message and exit\n"
-	 "       [--list-cores]      List all supported AVR cores and exit\n"
-	 "       [-v]                Raise verbosity level (can be passed more than once)\n"
-	 "       [--freq|-f <freq>]  Sets the frequency for an .hex firmware\n"
-	 "       [--mcu|-m <device>] Sets the MCU type for an .hex firmware\n"
-	 "       [--gdb|-g [<port>]] Listen for gdb connection on <port> (default 1234)\n"
-	 "       [--output|-o <file>] VCD file to save signal traces\n"
-	 "       [--start-vcd|-s     Start VCD output from reset\n"
-	 "       [--pc-trace|-p      Add PC to VCD traces\n"
-     "       [--machine-trace]   Add Machine states to VCD traces\n"
-     "       [--machine <machine>]   Select KH910/KH930/KH270 machine (default=KH910)\n"
-     "       [--carriage <carriage>] Select K/L/G carriage (default=K)\n"
-     "       [--beltphase <phase>]   Select Regular/Shifted (default=Regular)\n"
-     "       [--startside <side>]    Select Left/Right side to start (default=Left)\n"
+	 "       [--help|-h|-?]             Display this usage message and exit\n"
+	 "       [--list-cores]             List all supported AVR cores and exit\n"
+	 "       [-v]                       Raise verbosity level (can be passed more than once)\n"
+	 "       [--freq|-f <freq>]         Sets the frequency for an .hex firmware\n"
+	 "       [--mcu|-m <device>]        Sets the MCU type for an .hex firmware\n"
+	 "       [--gdb|-g [<port>]]        Listen for gdb connection on <port> (default 1234)\n"
+	 "       [--output|-o <file>]       VCD file to save signal traces\n"
+	 "       [--start-vcd|-s            Start VCD output from reset\n"
+	 "       [--pc-trace|-p             Add PC to VCD traces\n"
+     "       [--machine-trace]          Add Machine states to VCD traces\n"
+     "       [--machine <machine>]      Select KH910/KH930/KH270 machine (default=KH910)\n"
+     "       [--carriage <carriage>]    Select K/L/G carriage (default=K)\n"
+     "       [--beltphase <phase>]      Select Regular/Shifted (default=Regular)\n"
+     "       [--startside <side>]       Select Left/Right side to start (default=Left)\n"
      "       [--sensor-radius <radius>] Sensor radius (default=1)\n"
-	 "       <firmware>          HEX or ELF file to load (can include debugging syms)\n"
+     "       [--pattern <pattern>]      Test pattern (default=none)\n"
+     "       [--quiet]                  Quiet mode (default=no)\n"
+	 "       <firmware>                 HEX or ELF file to load (can include debugging syms)\n"
      "\n");
 	exit(1);
 }
@@ -211,6 +222,15 @@ parse_arguments(int argc, char *argv[])
             } else {
 				display_usage(basename(argv[0]));
             }
+		} else if (!strcmp(argv[pi], "--pattern")) {
+			if (pi < argc-1) {
+                strncpy(test_pattern, argv[++pi], sizeof(test_pattern));
+                test_enabled = 1;
+            } else {
+				display_usage(basename(argv[0]));
+            }
+		} else if (!strcmp(argv[pi], "--quiet")) {
+            quiet = 1;
 		} else if (argv[pi][0] != '-') {
             uint32_t loadBase = AVR_SEGMENT_OFFSET_FLASH;
 			sim_setup_firmware(argv[pi], loadBase, &firmware, argv[0]);
@@ -284,6 +304,60 @@ void vcd_trace_enable(int enable) {
     }
 }
 
+static void display() {
+    fprintf(stderr, "S=[");
+    for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
+        if ((machine.solenoid_states ^ machine.previous_solenoid_states) & (1 << i)) {
+            fprintf(stderr, "\x1b[7m");
+        }
+        fprintf(stderr, "%c\x1b[0m", machine.solenoid_states & (1<<i) ? '.' : '|');
+    }
+    fprintf(stderr, "], Pos = %6.2f, EP = %2d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n",
+            machine.carriage.position + (machine.encoder_phase % 4) / 4.0,
+            machine.encoder_phase,
+            machine.belt_phase_signal, machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
+    if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
+        beeper_history_add(' ');
+    fprintf(stderr, "A=[");
+    for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
+        if ((machine.armature_states ^ machine.previous_armature_states) & (1 << i)) {
+            fprintf(stderr, "\x1b[7m");
+        }
+
+        int angle_from_pusher = abs(((int)machine.encoder_phase + (16 - i) * 4) % 64 - 32);
+        if (angle_from_pusher <= PUSHER_HALFWIDTH_OFF) {
+            fprintf(stderr, angle_from_pusher <= PUSHER_HALFWIDTH_ON ? "\x1b[9m" : "\x1b[4m");
+        }
+        fprintf(stderr, "%c\x1b[0m", machine.armature_states & (1<<i) ? '.' : '|');
+    }
+    fprintf(stderr, "] %.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
+    machine.previous_armature_states = machine.armature_states;
+    machine.previous_solenoid_states = machine.solenoid_states;
+
+    char needle_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
+    char carriage_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
+    memset(carriage_buffer, ' ', sizeof(carriage_buffer));
+    memset(needle_buffer, ' ', sizeof(needle_buffer));
+
+    if ((machine.carriage.selected_needle >= -MARGIN_NEEDLES) && (machine.carriage.selected_needle < machine.num_needles + MARGIN_NEEDLES)) {
+        carriage_buffer[machine.carriage.selected_needle + MARGIN_NEEDLES] = 'x';
+    }
+    if ((machine.carriage.position >= -MARGIN_NEEDLES) && (machine.carriage.position < machine.num_needles + MARGIN_NEEDLES)) {
+        carriage_buffer[machine.carriage.position + MARGIN_NEEDLES] = '^';
+    }
+
+    int half_num_needles = machine.num_needles / 2;
+    for (int i=0; i < machine.num_needles; i++) {
+        needle_buffer[MARGIN_NEEDLES + i] = machine.needles[i];
+    }
+    fprintf(stderr, "<- %.*s\n   %.*s\n",
+            half_num_needles + MARGIN_NEEDLES, needle_buffer,
+            half_num_needles + MARGIN_NEEDLES, carriage_buffer);
+    fprintf(stderr, "-> %.*s\n   %.*s\n",
+            half_num_needles + MARGIN_NEEDLES, needle_buffer + half_num_needles + MARGIN_NEEDLES,
+            half_num_needles + MARGIN_NEEDLES, carriage_buffer + half_num_needles + MARGIN_NEEDLES);
+}
+
 static void * avr_run_thread(void * param)
 {
 	int state = cpu_Running;
@@ -339,22 +413,37 @@ static void * avr_run_thread(void * param)
     // does a complete revolution in <solenoid count> * 4 steps.
     // We define encoder_phase to be 0 when the first cam (connected to
     // solenoid 0) is in side-pushing position.
-    unsigned encoder_phase = 0;
+    machine.encoder_phase = 0;
 
-    char needles[machine.num_needles];
-    memset(needles, '.', machine.num_needles);
+    memset(machine.needles, '.', machine.num_needles);
+    machine.belt_phase_signal = 0;
+    machine.carriage.direction = machine.start_side == LEFT ? RIGHTWARDS : LEFTWARDS;
+    machine.carriage.selected_needle = -MARGIN_NEEDLES;
+    machine.dirty = 1;
 
 	while (*run && (state != cpu_Done) && (state != cpu_Crashed))
     {
         // Limit event/interrupt rate towards avr
-        if (avr_cycles_to_usec(avr, avr->cycle - lastChange)  > 10000) {
+        if (avr_cycles_to_usec(avr, avr->cycle - lastChange) > 10000) {
             lastChange = avr->cycle;
 
             enum event_type event;
             int value;
-            if (queue_pop(&event_queue, &event, &value))
+            int event_available = 0;
+            if (test_started) {
+                if (test_delay <= 0) {
+                    event = machine.start_side == LEFT ? CARRIAGE_RIGHT : CARRIAGE_LEFT;
+                    event_available = 1;
+                } else {
+                    test_delay--;
+                }
+            } else { 
+                event_available = queue_pop(&event_queue, &event, &value);
+            }
+
+            if (event_available)
             {
-                unsigned new_phase = encoder_phase;
+                unsigned new_phase = machine.encoder_phase;
                 switch (event)
                 {
                     case RESET_ARDUINO:
@@ -362,53 +451,50 @@ static void * avr_run_thread(void * param)
                         avr_reset(avr);
                         break;
                     case CARRIAGE_LEFT:
-                        new_phase = (encoder_phase-1)%64;
+                        machine.carriage.direction = LEFTWARDS;
+                        new_phase = (machine.encoder_phase-1)%64;
                         if ((new_phase%4) == 3) {
                             if (machine.carriage.position > -MARGIN_NEEDLES) {
                                 machine.carriage.position--;
                             } else {
                                 machine.carriage.position = -MARGIN_NEEDLES;
-                                new_phase = encoder_phase;
+                                new_phase = machine.encoder_phase;
                             }
                         }
                         break;
                     case CARRIAGE_RIGHT:
-                        new_phase = (encoder_phase+1)%64;
+                        machine.carriage.direction = RIGHTWARDS;
+                        new_phase = (machine.encoder_phase+1)%64;
                         if ((new_phase%4) == 0) {
                             if (machine.carriage.position < (machine.num_needles + MARGIN_NEEDLES - 1)) {
                                 machine.carriage.position++;
                             } else {
                                 machine.carriage.position = (machine.num_needles + MARGIN_NEEDLES - 1);
-                                new_phase = encoder_phase;
+                                new_phase = machine.encoder_phase;
                             }
                         }
                         break;
                     case VCD_DUMP:
                         vcd_enabled = ! vcd_enabled;
                         vcd_trace_enable(vcd_enabled);
-                        continue;
                         break;
                     default:
                         fprintf(stderr, "Unexpect event from graphic thread\n");
                         break;
                 }
-                encoder_phase = new_phase;
+                machine.encoder_phase = new_phase;
 
                 machine.hall_left = 1650;
                 machine.hall_right = 1650;
-                uint16_t solenoid_states = (shield.mcp23008[1].reg[MCP23008_REG_OLAT] << 8) + shield.mcp23008[0].reg[MCP23008_REG_OLAT]; 
-
-                // half-"width" of the pushing-down part of the circular cams
-                const int PUSHER_HALFWIDTH_ON = 8;
-                const int PUSHER_HALFWIDTH_OFF = 16;
+                machine.solenoid_states = (shield.mcp23008[1].reg[MCP23008_REG_OLAT] << 8) + shield.mcp23008[0].reg[MCP23008_REG_OLAT]; 
 
                 for (int i=0; i<16; i++) {
                     uint16_t mask = (1 << i);
-                    int solenoid_state = solenoid_states & mask;
+                    int solenoid_state = machine.solenoid_states & mask;
                     // Solenoid 0 is at angle 0 (side-pushing) when encoder_phase is 0
                     // -> angle from down-pusher is 32.
                     // Solenoid 1 is at angle 0 (side-pushing) when encoder_phase is 4.
-                    int angle_from_pusher = abs(((int)encoder_phase + (16 - i) * 4) % 64 - 32);
+                    int angle_from_pusher = abs(((int)machine.encoder_phase + (16 - i) * 4) % 64 - 32);
                     // The solenoid can:
                     //  - pull the armature down when angle from cam's down-pusher is small enough
                     //    (approx. 20 degrees on either side)
@@ -416,12 +502,10 @@ static void * avr_run_thread(void * param)
                     //    the lever will not start riding the cam's side-pusher until the next cycle.
                     // In other conditions, the lever will behave as if the solenoid had not changed state.
                     if (angle_from_pusher <= PUSHER_HALFWIDTH_ON || (angle_from_pusher <= PUSHER_HALFWIDTH_OFF && !solenoid_state)) {
-                        // fprintf(stderr, "phase=%d, copying bit %d\n", encoder_phase, i);
+                        // fprintf(stderr, "phase=%d, copying bit %d\n", machine.encoder_phase, i);
                         machine.armature_states = (machine.armature_states & ~mask) | solenoid_state;
                     }
                 }
-
-                int selected_needle;
                 int select_offset = 0;
                 switch (machine.carriage.type) {
                     case KNIT:
@@ -436,7 +520,7 @@ static void * avr_run_thread(void * param)
                         }
                         // Handle solenoids
                         select_offset = 24;
-                        if (event == CARRIAGE_RIGHT) {
+                        if (machine.carriage.direction == RIGHTWARDS) {
                             select_offset = -24;
                         }
                         break;
@@ -451,7 +535,7 @@ static void * avr_run_thread(void * param)
                         }
                         // Handle solenoids
                         select_offset = 12;
-                        if (event == CARRIAGE_RIGHT) {
+                        if (machine.carriage.direction == RIGHTWARDS) {
                             select_offset = -12;
                         }
                         break;
@@ -500,7 +584,7 @@ static void * avr_run_thread(void * param)
                         }
                         // Handle solenoids
                         select_offset = 15;
-                        if (event == CARRIAGE_RIGHT) {
+                        if (machine.carriage.direction == RIGHTWARDS) {
                             select_offset = -15;
                         }
                         break;
@@ -509,104 +593,70 @@ static void * avr_run_thread(void * param)
                         break;
                 }
 
-                selected_needle = machine.carriage.position + select_offset;
-                if ((selected_needle < machine.num_needles) && (selected_needle >= 0)) {
+                machine.carriage.selected_needle = machine.carriage.position + select_offset;
+                if ((machine.carriage.selected_needle < machine.num_needles) && (machine.carriage.selected_needle >= 0)) {
                     int solenoid_index;
                     switch (machine.type) {
                         case KH270:
-                            solenoid_index = selected_needle + 4;
+                            solenoid_index = machine.carriage.selected_needle + 4;
                             // K270 solenoid to needle mapping is direction-dependent
-                            if (event == CARRIAGE_LEFT) {
+                            if (machine.carriage.direction == LEFTWARDS) {
                                 solenoid_index += machine.num_solenoids >> 1;
                             }
                             // 12 solenoids mapped to position [3-14]
                             solenoid_index = 3 + solenoid_index % machine.num_solenoids; 
                             break;
                         default:
-                            solenoid_index = selected_needle;
+                            solenoid_index = machine.carriage.selected_needle;
                             // Solenoid to needle mapping is belt phase-dependent
                             if (machine.belt_phase == SHIFTED) {
                                 solenoid_index += machine.num_solenoids >> 1;
                             }
                             // LACE solenoid to needle mapping is direction-dependent
-                            if ((machine.carriage.type == LACE) && (event == CARRIAGE_LEFT)) {
+                            if ((machine.carriage.type == LACE) && (machine.carriage.direction == LEFTWARDS)) {
                                 solenoid_index += machine.num_solenoids >> 1;
                             }
                             solenoid_index = solenoid_index % machine.num_solenoids; 
                             break;
                     }
 
-                    needles[selected_needle] = machine.armature_states & (1<< solenoid_index) ? '.' : '|';
+                    machine.needles[machine.carriage.selected_needle] = machine.armature_states & (1<< solenoid_index) ? '.' : '|';
                 }
 
-                avr_raise_irq(encoder_v2.irq + IRQ_BUTTON_OUT, (phase_map[encoder_phase % 4] & 1) ? 1 : 0);
-                avr_raise_irq(encoder_v1.irq + IRQ_BUTTON_OUT, (phase_map[encoder_phase % 4] & 2) ? 1 : 0);
+                avr_raise_irq(encoder_v2.irq + IRQ_BUTTON_OUT, (phase_map[machine.encoder_phase % 4] & 1) ? 1 : 0);
+                avr_raise_irq(encoder_v1.irq + IRQ_BUTTON_OUT, (phase_map[machine.encoder_phase % 4] & 2) ? 1 : 0);
 
                 // Belt phase signal is slightly early compared to encoder phase
-                int beltPhase = ((encoder_phase + BELT_PHASE_ADVANCE) % (machine.num_solenoids * 4) > (machine.num_solenoids * 2)) ? 0 : 1;
-                avr_raise_irq(encoder_beltPhase.irq + IRQ_BUTTON_OUT, beltPhase);
+                machine.belt_phase_signal = ((machine.encoder_phase + BELT_PHASE_ADVANCE) % (machine.num_solenoids * 4) > (machine.num_solenoids * 2)) ? 0 : 1;
+                avr_raise_irq(encoder_beltPhase.irq + IRQ_BUTTON_OUT, machine.belt_phase_signal);
 
-                uint16_t previous_solenoid_states = machine.solenoid_states;
-                machine.solenoid_states = solenoid_states;
-
-                fprintf(stderr, "S=[");
-                for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
-                    if ((solenoid_states ^ previous_solenoid_states) & (1 << i)) {
-                        fprintf(stderr, "\x1b[7m");
-                    }
-                    fprintf(stderr, "%c\x1b[0m", solenoid_states & (1<<i) ? '.' : '|');
-                }
-                fprintf(stderr, "], Pos = %6.2f, EP = %2d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n",
-                        machine.carriage.position + (encoder_phase % 4) / 4.0,
-                        encoder_phase,
-                        beltPhase, machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
-                if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
-                    beeper_history_add(' ');
-                fprintf(stderr, "A=[");
-                for (int i=(machine.num_solenoids == 12 ? 3 : 0); i<=(machine.num_solenoids == 12 ? 14 : 15);i++) {
-                    if ((machine.armature_states ^ machine.previous_armature_states) & (1 << i)) {
-                        fprintf(stderr, "\x1b[7m");
-                    }
-
-                    int angle_from_pusher = abs(((int)encoder_phase + (16 - i) * 4) % 64 - 32);
-                    if (angle_from_pusher <= PUSHER_HALFWIDTH_OFF) {
-                        fprintf(stderr, angle_from_pusher <= PUSHER_HALFWIDTH_ON ? "\x1b[9m" : "\x1b[4m");
-                    }
-                    fprintf(stderr, "%c\x1b[0m", machine.armature_states & (1<<i) ? '.' : '|');
-                }
-                fprintf(stderr, "] %.*s\n", (int)sizeof(shield.slip_history), shield.slip_history);
-                machine.previous_armature_states = machine.armature_states;
-
-                char needle_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
-                char carriage_buffer[MARGIN_NEEDLES + machine.num_needles + MARGIN_NEEDLES];
-                memset(carriage_buffer, ' ', sizeof(carriage_buffer));
-                memset(needle_buffer, ' ', sizeof(needle_buffer));
-
-                if ((selected_needle >= -MARGIN_NEEDLES) && (selected_needle < machine.num_needles + MARGIN_NEEDLES)) {
-                    carriage_buffer[selected_needle + MARGIN_NEEDLES] = 'x';
-                }
-                if ((machine.carriage.position >= -MARGIN_NEEDLES) && (machine.carriage.position < machine.num_needles + MARGIN_NEEDLES)) {
-                    carriage_buffer[machine.carriage.position + MARGIN_NEEDLES] = '^';
-                }
-
-                int half_num_needles = machine.num_needles / 2;
-                for (int i=0; i < machine.num_needles; i++) {
-                    needle_buffer[MARGIN_NEEDLES + i] = needles[i];
-                }
-                fprintf(stderr, "<- %.*s\n   %.*s\n",
-                        half_num_needles + MARGIN_NEEDLES, needle_buffer,
-                        half_num_needles + MARGIN_NEEDLES, carriage_buffer);
-                fprintf(stderr, "-> %.*s\n   %.*s\n",
-                        half_num_needles + MARGIN_NEEDLES, needle_buffer + half_num_needles + MARGIN_NEEDLES,
-                        half_num_needles + MARGIN_NEEDLES, carriage_buffer + half_num_needles + MARGIN_NEEDLES);
+                machine.dirty = 1;
+            }
+            if (machine.dirty) {
+                if (!quiet)
+                    display();
 
                 // Trigger IRQ for machine internal data
                 if (trace_machine) {
                     avr_raise_irq(&vcd_irq_hall_left, machine.hall_left);
                     avr_raise_irq(&vcd_irq_hall_right, machine.hall_right);
                     avr_raise_irq(&vcd_irq_carriage_position, machine.carriage.position);
-                    avr_raise_irq(&vcd_irq_solenoids_state, solenoid_states);
+                    avr_raise_irq(&vcd_irq_solenoids_state, machine.solenoid_states);
                 }
+
+                if (test_enabled) {
+                    if (machine.carriage.position >= machine.num_needles + MARGIN_NEEDLES - 1 || machine.carriage.position <= -MARGIN_NEEDLES) {
+                        fprintf(stderr, "expected=%s\nactual  =", test_pattern);
+                        for (int i=0; i<machine.num_needles; i++) {
+                            fprintf(stderr, "%s%c\x1b[0m", test_pattern[i] != machine.needles[i] ? "\x1b[7m" : "", machine.needles[i]);
+                        }
+                        fprintf(stderr, "\n");
+                        int success = memcmp(test_pattern, machine.needles, strlen(test_pattern)) == 0;
+                        exit(success ? 0 : 1);
+                    }
+                }
+
+                machine.dirty = 0;
             }
         }
 
@@ -630,7 +680,7 @@ static void * avr_run_thread(void * param)
 	return NULL;
 }
 
-static void slip_print(slipmsg_t *msg);
+static void slip_process(slipmsg_t *msg);
 
 static void slip_history_add(char c) {
 	memmove(shield.slip_history, shield.slip_history + 1, sizeof(shield.slip_history) - 1);
@@ -658,6 +708,25 @@ static void slip_print(slipmsg_t *msg) {
 	slip_history_add(' ');
 }
 
+static void slip_process(slipmsg_t *msg) {
+    machine.dirty = 1;
+    slip_print(msg);
+    if (test_enabled) {
+        if (msg->prefix == '<' && msg -> buf[0] == 0xc5) {
+            fprintf(stderr, "cnfInit detected\n");
+            test_started = 1;
+            test_delay = 0;
+        }
+        if (msg->prefix == '<' && msg -> buf[0] == 0x82) {
+            fprintf(stderr, "reqLine(%d) detected\n", msg->buf[1]);
+            test_delay = 100;
+        }
+        if (msg->prefix == '>' && msg -> buf[0] == 0x42) {
+            fprintf(stderr, "cnfLine(%d) detected\n", msg->buf[1]);
+        }
+    }
+}
+
 static void slip_add_byte(
     	struct avr_irq_t *irq,
 		uint32_t value,
@@ -668,7 +737,7 @@ static void slip_add_byte(
     {
         if (msg->len > 0)
         {
-            slip_print(msg);
+            slip_process(msg);
             msg->len = 0;
         }
     }
