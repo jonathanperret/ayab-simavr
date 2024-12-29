@@ -547,9 +547,9 @@ static void * avr_run_thread(void * param)
                     }
                     fprintf(stderr, "%c\x1b[0m", solenoid_states & (1<<i) ? '.' : '|');
                 }
-                fprintf(stderr, "], Ph = %d, Pos = %3.2f, BP = %d, Sensors = (%4d, %4d) B=%.*s\n",
-                        encoder_phase,
+                fprintf(stderr, "], Pos = %6.2f, EP = %2d, BP = %d, Sensors = (%4d, %4d) B=%.*s\n",
                         machine.carriage.position + (encoder_phase % 4) / 4.0,
+                        encoder_phase,
                         beltPhase, machine.hall_left, machine.hall_right, (int)sizeof(shield.beeper_history), shield.beeper_history);
                 if (shield.beeper_history[sizeof(shield.beeper_history) - 1] == ' ')
                     beeper_history_add(' ');
