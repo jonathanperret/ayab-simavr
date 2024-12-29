@@ -102,6 +102,7 @@ display_usage(
      "       [--carriage <carriage>] Select K/L/G carriage (default=K)\n"
      "       [--beltphase <phase>]   Select Regular/Shifted (default=Regular)\n"
      "       [--startside <side>]    Select Left/Right side to start (default=Left)\n"
+     "       [--sensor-radius <radius>] Sensor radius (default=1)\n"
 	 "       <firmware>          HEX or ELF file to load (can include debugging syms)\n"
      "\n");
 	exit(1);
@@ -192,6 +193,12 @@ parse_arguments(int argc, char *argv[])
             } else {
 				display_usage(basename(argv[0]));
             }
+		} else if (!strcmp(argv[pi], "--sensor-radius")) {
+			if (pi < argc-1) {
+				machine.sensor_radius = atoi(argv[++pi]);
+			} else {
+				display_usage(basename(argv[0]));
+			}
 		} else if (!strcmp(argv[pi], "--beltphase")) {
 			if (pi < argc-1) {
                 if (!strcmp(argv[++pi], "Regular")) {
@@ -208,6 +215,8 @@ parse_arguments(int argc, char *argv[])
             uint32_t loadBase = AVR_SEGMENT_OFFSET_FLASH;
 			sim_setup_firmware(argv[pi], loadBase, &firmware, argv[0]);
             printf ("%s loaded (f=%d mmcu=%s)\n", argv[pi], (int) firmware.frequency, firmware.mmcu);
+        } else {
+            display_usage(basename(argv[0]));
         }
     }
 }
@@ -417,9 +426,9 @@ static void * avr_run_thread(void * param)
                 switch (machine.carriage.type) {
                     case KNIT:
                         // Handle hall sensors
-                        if (machine.carriage.position == 0) {
+                        if (abs(machine.carriage.position) <= machine.sensor_radius) {
                             machine.hall_left = 2200; //TBC North
-                        } else if (machine.carriage.position == (machine.num_needles - 1)) {
+                        } else if (abs(machine.carriage.position - (machine.num_needles - 1)) <= machine.sensor_radius) {
                             machine.hall_right = 2200; //TBC North
                             if(machine.type == KH910) { // Shield error
                                 machine.hall_right = 0; // Digital low
@@ -432,9 +441,9 @@ static void * avr_run_thread(void * param)
                         }
                         break;
                     case LACE:
-                        if (machine.carriage.position == 0) {
+                        if (abs(machine.carriage.position) <= machine.sensor_radius) {
                             machine.hall_left = 100; //TBC South
-                        } else if (machine.carriage.position == (machine.num_needles - 1)) {
+                        } else if (abs(machine.carriage.position - (machine.num_needles - 1)) <= machine.sensor_radius) {
                             machine.hall_right = 100; //TBC South
                             if(machine.type == KH910) { // Shield error
                                 machine.hall_right = 1650; // HighZ
@@ -691,6 +700,7 @@ int main(int argc, char *argv[])
     machine.num_solenoids = 16;
     machine.carriage.type = KNIT;
     machine.belt_phase = REGULAR;
+    machine.sensor_radius = 1;
 
 	printf (
         "---------------------------------------------------------\n"

@@ -22,6 +22,7 @@ typedef struct {
 typedef struct {
     enum machine_type type;
     enum side start_side;
+    int sensor_radius;
     int num_needles;
     int num_solenoids;
     carriage_t carriage;
