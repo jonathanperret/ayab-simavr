@@ -40,6 +40,7 @@ typedef struct {
     uint16_t previous_solenoid_states;
     uint16_t armature_states;
     uint16_t previous_armature_states;
+    int selecting_armature;
     int dirty;
 } machine_t;
 
