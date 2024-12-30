@@ -24,6 +24,7 @@
 #include <libgen.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "sim_avr.h"
 #include "sim_time.h"
@@ -89,6 +90,12 @@ list_cores()
 		printf("\n");
 	}
 	exit(1);
+}
+
+static uint64_t real_us() {
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    return start.tv_sec * 1000000 + start.tv_nsec / 1000;
 }
 
 static void
@@ -701,7 +708,7 @@ static void slip_history_add(char c) {
 	shield.slip_history[sizeof(shield.slip_history) - 1] = c;
 }
 
-static void slip_print(slipmsg_t *msg) {
+static void slip_record(slipmsg_t *msg) {
 	slip_history_add(msg->prefix);
 	slip_history_add(' ');
 	for (int i = 0; i < msg->len; i++)
@@ -722,21 +729,52 @@ static void slip_print(slipmsg_t *msg) {
 	slip_history_add(' ');
 }
 
+static uint32_t delta_avr() {
+    static uint32_t last_us = 0;
+    uint32_t us = avr_cycles_to_usec(avr, avr->cycle);
+    uint32_t delta = us - last_us;
+    last_us = us;
+    return delta;
+}
+
+static uint32_t delta_real() {
+    static uint64_t last_us = 0;
+    uint64_t us = real_us();
+    uint32_t delta = us - last_us;
+    last_us = us;
+    return delta;
+}
+
 static void slip_process(slipmsg_t *msg) {
     machine.dirty = 1;
-    slip_print(msg);
-    if (test_enabled) {
-        if (msg->prefix == '<' && msg -> buf[0] == 0xc5) {
-            fprintf(stderr, "cnfInit detected\n");
-            test_started = 1;
-            test_delay = 0;
-        }
-        if (msg->prefix == '<' && msg -> buf[0] == 0x82) {
-            fprintf(stderr, "reqLine(%d) detected\n", msg->buf[1]);
-            test_delay = 100;
-        }
-        if (msg->prefix == '>' && msg -> buf[0] == 0x42) {
-            fprintf(stderr, "cnfLine(%d) detected\n", msg->buf[1]);
+    slip_record(msg);
+    if (test_enabled || 1) {
+        if (msg -> buf[0] == 0x03) {
+            fprintf(stderr, "%+10d %+10d reqInfo\n", delta_avr(), delta_real());
+        } else if (msg -> buf[0] == 0xc3) {
+            fprintf(stderr, "%+10d %+10d cnfInfo\n", delta_avr(), delta_real());
+        } else if (msg -> buf[0] == 0x01) {
+            fprintf(stderr, "%+10d %+10d reqStart\n", delta_avr(), delta_real());
+        } else if (msg -> buf[0] == 0xc1) {
+            fprintf(stderr, "%+10d %+10d cnfStart\n", delta_avr(), delta_real());
+        } else if (msg -> buf[0] == 0x05) {
+            fprintf(stderr, "%+10d %+10d reqInit\n", delta_avr(), delta_real());
+        } else if (msg -> buf[0] == 0xc5) {
+            fprintf(stderr, "%+10d %+10d cnfInit\n", delta_avr(), delta_real());
+            if (test_enabled) {
+                test_started = 1;
+            }
+        } else if (msg -> buf[0] == 0x84) {
+            fprintf(stderr, "%+10d %+10d indState\n", delta_avr(), delta_real());
+        } else if (msg -> buf[0] == 0x82) {
+            fprintf(stderr, "%+10d %+10d reqLine(%d)\n", delta_avr(), delta_real(), msg->buf[1]);
+            test_delay = 10;
+        } else if (msg -> buf[0] == 0x42) {
+            fprintf(stderr, "%+10d %+10d cnfLine(%d)\n", delta_avr(), delta_real(), msg->buf[1]);
+        } else if (msg -> buf[0] == 0xff) {
+            fprintf(stderr, "%+10d %+10d %.*s\n", delta_avr(), delta_real(), msg->len - 1, msg->buf+1);
+        } else {
+            fprintf(stderr, "%+10d %+10d msg %02x\n", delta_avr(), delta_real(), msg->buf[0]);
         }
     }
 }
@@ -785,16 +823,18 @@ int main(int argc, char *argv[])
     machine.belt_phase = REGULAR;
     machine.sensor_radius = 1;
 
-	printf (
-        "---------------------------------------------------------\n"
-        "AYAB shield emulation \n"
-        "- Use left/right arrows to move the carriage\n"
-        "- 'v' to start/stop VCD traces"
-        "- 'q' or ESC to quit\n"
-        "----------------------------------------------------------\n"
-    );
-
     parse_arguments(argc, argv);
+
+    if (!test_enabled) {
+        printf (
+            "---------------------------------------------------------\n"
+            "AYAB shield emulation \n"
+            "- Use left/right arrows to move the carriage\n"
+            "- 'v' to start/stop VCD traces"
+            "- 'q' or ESC to quit\n"
+            "----------------------------------------------------------\n"
+        );
+    }
 
     if (machine.type == KH270) {
         machine.num_needles = 112;

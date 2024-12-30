@@ -177,7 +177,7 @@ uart_pty_thread(
 		}
 
 		// short, but not too short interval
-		struct timeval timo = { 0, 500 };
+		struct timeval timo = { 0, 50 };
 		int ret = select(max+1, &read_set, &write_set, NULL, &timo);
 
 		if (ret < 0)
