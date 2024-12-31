@@ -33,6 +33,7 @@
 #include "avr_adc.h"
 #include "avr_twi.h"
 #include "avr_extint.h"
+#include "avr_uart.h"
 #include "sim_elf.h"
 #include "sim_hex.h"
 #include "sim_gdb.h"
@@ -916,16 +917,19 @@ int main(int argc, char *argv[])
 	}
 
     // Connect uart 0 to a virtual pty
+    char uart = '0';
 	uart_pty_init(avr, &uart_pty);
-	uart_pty_connect(&uart_pty, '0');
+	uart_pty_connect(&uart_pty, uart);
 
     // Serial (SLIP) monitor
     shield.slip_msg_in.prefix = '<';
     shield.slip_msg_out.prefix = '>';
 	memset(shield.slip_history, ' ', sizeof(shield.slip_history));
 
-    avr_irq_register_notify(uart_pty.irq + IRQ_UART_PTY_BYTE_IN, slip_add_byte, &shield.slip_msg_in);
-    avr_irq_register_notify(uart_pty.irq + IRQ_UART_PTY_BYTE_OUT, slip_add_byte, &shield.slip_msg_out);
+    avr_irq_register_notify(avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ(uart), UART_IRQ_OUTPUT),
+                            slip_add_byte, &shield.slip_msg_out);
+    avr_irq_register_notify(avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ(uart), UART_IRQ_INPUT),
+                            slip_add_byte, &shield.slip_msg_in);
 
     // System Hardware Description
     // mcp23008 at 0x20 & 0x21
