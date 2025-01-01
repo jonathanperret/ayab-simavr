@@ -25,6 +25,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <assert.h>
 
 #include "sim_avr.h"
 #include "sim_time.h"
@@ -64,11 +65,12 @@ machine_t machine;
 shield_t shield;
 char test_pattern[201] = "";
 int test_enabled = 0;
-int test_started = 0;
+int test_step = 0;
 int test_delay = 0;
 button_t encoder_v1, encoder_v2;
 button_t encoder_beltPhase;
 avr_irq_t *adcbase_irq;
+avr_irq_t *serial_in_irq;
 
 extern avr_kind_t *avr_kind[];
 
@@ -79,6 +81,53 @@ extern avr_kind_t *avr_kind[];
 // half-"width" of the pushing-down part of the circular cams
 const int PUSHER_HALFWIDTH_ON = 8;
 const int PUSHER_HALFWIDTH_OFF = 16;
+
+enum AYAB_API {
+  reqStart = 0x01,
+  cnfStart = 0xC1,
+  reqLine = 0x82,
+  cnfLine = 0x42,
+  reqInfo = 0x03,
+  cnfInfo = 0xC3,
+  reqTest = 0x04,
+  cnfTest = 0xC4,
+  indState = 0x84,
+  helpCmd = 0x25,
+  sendCmd = 0x26,
+  beepCmd = 0x27,
+  setSingleCmd = 0x28,
+  setAllCmd = 0x29,
+  readEOLsensorsCmd = 0x2A,
+  readEncodersCmd = 0x2B,
+  autoReadCmd = 0x2C,
+  autoTestCmd = 0x2D,
+  stopCmd = 0x2E,
+  quitCmd = 0x2F,
+  reqInit = 0x05,
+  cnfInit = 0xC5,
+  testRes = 0xEE,
+  debug = 0x9F
+};
+
+uint8_t CRC8(const uint8_t *buffer, size_t len) {
+  uint8_t crc = 0x00U;
+
+  while (len--) {
+    uint8_t extract = *buffer;
+    buffer++;
+
+    for (uint8_t tempI = 8U; tempI; tempI--) {
+      uint8_t sum = (crc ^ extract) & 0x01U;
+      crc >>= 1U;
+
+      if (sum) {
+        crc ^= 0x8CU;
+      }
+      extract >>= 1U;
+    }
+  }
+  return crc;
+}
 
 static void
 list_cores()
@@ -91,12 +140,6 @@ list_cores()
 		printf("\n");
 	}
 	exit(1);
-}
-
-static uint64_t real_us() {
-    struct timespec start;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
-    return start.tv_sec * 1000000 + start.tv_nsec / 1000;
 }
 
 static void
@@ -242,7 +285,6 @@ parse_arguments(int argc, char *argv[])
 		} else if (argv[pi][0] != '-') {
             uint32_t loadBase = AVR_SEGMENT_OFFSET_FLASH;
 			sim_setup_firmware(argv[pi], loadBase, &firmware, argv[0]);
-            printf ("%s loaded (f=%d mmcu=%s)\n", argv[pi], (int) firmware.frequency, firmware.mmcu);
         } else {
             display_usage(basename(argv[0]));
         }
@@ -310,6 +352,18 @@ void vcd_trace_enable(int enable) {
         enable ? avr_vcd_start(avr->vcd) : avr_vcd_stop(avr->vcd);
         printf("VCD trace %s (%s)\n", avr->vcd->filename, enable ? "enabled":"disabled");
     }
+}
+
+static void serial_inject(uint8_t b) {
+    avr_raise_irq(serial_in_irq, b);
+}
+
+static void slip_inject(const uint8_t *msg, int len) {
+    serial_inject(0xc0);
+    for (int i=0; i<len; i++) {
+        serial_inject(msg[i]);
+    }
+    serial_inject(0xc0);
 }
 
 static void display() {
@@ -444,14 +498,31 @@ static void * avr_run_thread(void * param)
             enum event_type event;
             int value;
             int event_available = 0;
-            if (test_started) {
-                if (test_delay <= 0) {
-                    event = machine.start_side == LEFT ? CARRIAGE_RIGHT : CARRIAGE_LEFT;
-                    event_available = 1;
-                } else {
+            if (test_enabled) {
+                if (test_delay > 0)
+                {
                     test_delay--;
                 }
-            } else { 
+                else
+                {
+                    switch(test_step) {
+                    case 0:
+                    {
+                        uint8_t buf[3] = {reqInit, machine.type };
+                        buf[2] = CRC8(buf, 2);
+                        slip_inject(buf, sizeof(buf));
+                        test_step = 1;
+                        break;
+                    }
+                    case 1:
+                        event = machine.start_side == LEFT ? CARRIAGE_RIGHT : CARRIAGE_LEFT;
+                        event_available = 1;
+                        break;
+                    }
+                }
+            }
+            else
+            {
                 event_available = queue_pop(&event_queue, &event, &value);
             }
 
@@ -669,12 +740,14 @@ static void * avr_run_thread(void * param)
 
             if (test_enabled) {
                 if (machine.carriage.position >= machine.num_needles + MARGIN_NEEDLES - 1 || machine.carriage.position <= -MARGIN_NEEDLES) {
-                    fprintf(stderr, "expected=%.*s\nactual  =", machine.num_needles, test_pattern);
-                    for (int i=0; i<machine.num_needles; i++) {
-                        fprintf(stderr, "%s%c\x1b[0m", test_pattern[i] != machine.needles[i] ? "\x1b[7m" : "", machine.needles[i]);
-                    }
-                    fprintf(stderr, "\n");
                     int success = memcmp(test_pattern, machine.needles, machine.num_needles) == 0;
+                    if (!success) {
+                        fprintf(stderr, "expected=%.*s\nactual  =", machine.num_needles, test_pattern);
+                        for (int i=0; i<machine.num_needles; i++) {
+                            fprintf(stderr, "%s%c\x1b[0m", test_pattern[i] != machine.needles[i] ? "\x1b[7m" : "", machine.needles[i]);
+                        }
+                        fprintf(stderr, "\n");
+                    }
                     exit(success ? 0 : 1);
                 }
             }
@@ -730,6 +803,13 @@ static void slip_record(slipmsg_t *msg) {
 	slip_history_add(' ');
 }
 
+#if 0
+static uint64_t real_us() {
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    return start.tv_sec * 1000000 + start.tv_nsec / 1000;
+}
+
 static uint32_t delta_avr() {
     static uint32_t last_us = 0;
     uint32_t us = avr_cycles_to_usec(avr, avr->cycle);
@@ -746,36 +826,77 @@ static uint32_t delta_real() {
     return delta;
 }
 
-static void slip_process(slipmsg_t *msg) {
+#define TRACE(format, ...) fprintf(stderr, "%+10d %+10d " format "\n", delta_avr(), delta_real(), ## __VA_ARGS__)
+#else
+#define TRACE(format, ...) {}
+#endif
+
+static void slip_process(slipmsg_t *msg)
+{
     machine.dirty = 1;
     slip_record(msg);
-    if (test_enabled || 1) {
-        if (msg -> buf[0] == 0x03) {
-            fprintf(stderr, "%+10d %+10d reqInfo\n", delta_avr(), delta_real());
-        } else if (msg -> buf[0] == 0xc3) {
-            fprintf(stderr, "%+10d %+10d cnfInfo\n", delta_avr(), delta_real());
-        } else if (msg -> buf[0] == 0x01) {
-            fprintf(stderr, "%+10d %+10d reqStart\n", delta_avr(), delta_real());
-        } else if (msg -> buf[0] == 0xc1) {
-            fprintf(stderr, "%+10d %+10d cnfStart\n", delta_avr(), delta_real());
-        } else if (msg -> buf[0] == 0x05) {
-            fprintf(stderr, "%+10d %+10d reqInit\n", delta_avr(), delta_real());
-        } else if (msg -> buf[0] == 0xc5) {
-            fprintf(stderr, "%+10d %+10d cnfInit\n", delta_avr(), delta_real());
-            if (test_enabled) {
-                test_started = 1;
+    if (test_enabled)
+    {
+        switch (msg->buf[0])
+        {
+        case reqInfo:
+            TRACE("reqInfo");
+            break;
+        case cnfInfo:
+            TRACE("cnfInfo");
+            break;
+        case reqInit:
+            TRACE("reqInit");
+            break;
+        case cnfInit:
+            TRACE("cnfInit");
+            assert(msg->buf[1] == 0);
+            break;
+        case indState:
+            TRACE("indState");
+            if (test_enabled)
+            {
+                uint8_t buf[5] = { reqStart, 0, strlen(test_pattern) - 1, 0 };
+                buf[4] = CRC8(buf, 4);
+                slip_inject(buf, sizeof(buf));
             }
-        } else if (msg -> buf[0] == 0x84) {
-            fprintf(stderr, "%+10d %+10d indState\n", delta_avr(), delta_real());
-        } else if (msg -> buf[0] == 0x82) {
-            fprintf(stderr, "%+10d %+10d reqLine(%d)\n", delta_avr(), delta_real(), msg->buf[1]);
-            test_delay = 10;
-        } else if (msg -> buf[0] == 0x42) {
-            fprintf(stderr, "%+10d %+10d cnfLine(%d)\n", delta_avr(), delta_real(), msg->buf[1]);
-        } else if (msg -> buf[0] == 0xff) {
-            fprintf(stderr, "%+10d %+10d %.*s\n", delta_avr(), delta_real(), msg->len - 1, msg->buf+1);
-        } else {
-            fprintf(stderr, "%+10d %+10d msg %02x\n", delta_avr(), delta_real(), msg->buf[0]);
+            break;
+        case reqStart:
+            TRACE("reqStart");
+            break;
+        case cnfStart:
+            TRACE("cnfStart");
+            assert(msg->buf[1] == 0);
+            break;
+        case reqLine:
+            TRACE("reqLine(%d)", msg->buf[1]);
+            if (test_enabled)
+            {
+                int requestedLine = msg->buf[1];
+                int patlen = strlen(test_pattern);
+                int bufLen = 4 + (patlen + 7) / 8 + 1;
+                uint8_t buf[bufLen];
+                memset(buf, 0, bufLen);
+                buf[0] = cnfLine;
+                buf[1] = requestedLine;
+                for (int i=0; i < patlen; i++) {
+                    if (test_pattern[i] == '|') {
+                        buf[ 4 + i / 8 ] |= 1 << (i % 8);
+                    }
+                }
+                buf[bufLen - 1] = CRC8(buf, bufLen - 1);
+                slip_inject(buf, bufLen);
+                test_delay = 10;
+            }
+            break;
+        case cnfLine:
+            TRACE("cnfLine(%d)", msg->buf[1]);
+            break;
+        case 0xff:
+            TRACE("%.*s", msg->len - 1, msg->buf + 1);
+            break;
+        default:
+            TRACE("msg %02x", msg->buf[0]);
         }
     }
 }
@@ -921,8 +1042,7 @@ int main(int argc, char *argv[])
 
     // Connect uart 0 to a virtual pty
     char uart = '0';
-	uart_pty_init(avr, &uart_pty);
-	uart_pty_connect(&uart_pty, uart);
+
 
     // Serial (SLIP) monitor
     shield.slip_msg_in.prefix = '<';
@@ -933,6 +1053,13 @@ int main(int argc, char *argv[])
                             slip_add_byte, &shield.slip_msg_out);
     avr_irq_register_notify(avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ(uart), UART_IRQ_INPUT),
                             slip_add_byte, &shield.slip_msg_in);
+
+    if (test_enabled) {
+        serial_in_irq = avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ(uart), UART_IRQ_INPUT);
+    } else {
+        uart_pty_init(avr, &uart_pty);
+        uart_pty_connect(&uart_pty, uart);
+    }
 
     // System Hardware Description
     // mcp23008 at 0x20 & 0x21
@@ -986,10 +1113,11 @@ int main(int argc, char *argv[])
     avr_irq_register_notify(adcbase_irq + ADC_IRQ_OUT_TRIGGER, adcTriggerCB, NULL);
 
     // Start display 
-    printf( "\nsimavr launching\n");
-
-    ayab_display(argc, argv, avr_run_thread, &machine, &shield);
-
-    uart_pty_stop(&uart_pty);
-    printf( "\nsimavr done:\n");
+    if(test_enabled) {
+        int avr_thread_running = 1;
+        avr_run_thread(&avr_thread_running);
+    } else {
+        ayab_display(argc, argv, avr_run_thread, &machine, &shield);
+        uart_pty_stop(&uart_pty);
+    }
 }
