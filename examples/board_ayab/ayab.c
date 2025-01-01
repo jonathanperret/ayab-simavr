@@ -108,8 +108,8 @@ display_usage(
 	 "       [--help|-h|-?]             Display this usage message and exit\n"
 	 "       [--list-cores]             List all supported AVR cores and exit\n"
 	 "       [-v]                       Raise verbosity level (can be passed more than once)\n"
-	 "       [--freq|-f <freq>]         Sets the frequency for an .hex firmware\n"
-	 "       [--mcu|-m <device>]        Sets the MCU type for an .hex firmware\n"
+	 "       [--freq|-f <freq>]         Sets the frequency for an .hex firmware (default 16000000)\n"
+	 "       [--mcu|-m <device>]        Sets the MCU type for an .hex firmware (default atmega328)\n"
 	 "       [--gdb|-g [<port>]]        Listen for gdb connection on <port> (default 1234)\n"
 	 "       [--output|-o <file>]       VCD file to save signal traces\n"
 	 "       [--start-vcd|-s            Start VCD output from reset\n"
@@ -823,6 +823,9 @@ int main(int argc, char *argv[])
     machine.carriage.type = KNIT;
     machine.belt_phase = REGULAR;
     machine.sensor_radius = 1;
+
+    strncpy(firmware.mmcu, "atmega328", sizeof(firmware.mmcu));
+    firmware.frequency = 16000000;
 
     parse_arguments(argc, argv);
 
