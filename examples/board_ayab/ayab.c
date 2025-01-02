@@ -63,6 +63,9 @@ uart_pty_t uart_pty;
 
 machine_t machine;
 shield_t shield;
+int start_needle = 0;
+int stop_needle = -1;
+char pattern_src[201] = "";
 char test_pattern[201] = "";
 int test_enabled = 0;
 int test_step = 0;
@@ -164,6 +167,8 @@ display_usage(
      "       [--startside <side>]       Select Left/Right side to start (default=Left)\n"
      "       [--sensor-radius <radius>] Sensor radius (default=1)\n"
      "       [--pattern <pattern>]      Test pattern (default=none)\n"
+     "       [--start-needle <int>]     Start needle (default=0)\n"
+     "       [--stop-needle <int>]      Stop needle (default=last)\n"
      "       [--quiet]                  Quiet mode (default=no)\n"
 	 "       <firmware>                 HEX or ELF file to load (can include debugging syms)\n"
      "\n");
@@ -261,6 +266,18 @@ parse_arguments(int argc, char *argv[])
 			} else {
 				display_usage(basename(argv[0]));
 			}
+		} else if (!strcmp(argv[pi], "--start-needle")) {
+			if (pi < argc-1) {
+				start_needle = atoi(argv[++pi]);
+			} else {
+				display_usage(basename(argv[0]));
+			}
+		} else if (!strcmp(argv[pi], "--stop-needle")) {
+			if (pi < argc-1) {
+				stop_needle = atoi(argv[++pi]);
+			} else {
+				display_usage(basename(argv[0]));
+			}
 		} else if (!strcmp(argv[pi], "--beltphase")) {
 			if (pi < argc-1) {
                 if (!strcmp(argv[++pi], "Regular")) {
@@ -275,7 +292,7 @@ parse_arguments(int argc, char *argv[])
             }
 		} else if (!strcmp(argv[pi], "--pattern")) {
 			if (pi < argc-1) {
-                strncpy(test_pattern, argv[++pi], sizeof(test_pattern));
+                strncpy(pattern_src, argv[++pi], sizeof(pattern_src));
                 test_enabled = 1;
             } else {
 				display_usage(basename(argv[0]));
@@ -403,6 +420,22 @@ static void slip_inject(const uint8_t *msg, int len) {
     serial_inject(0xc0);
 }
 
+static void check_pattern()
+{
+    int success = memcmp(test_pattern + start_needle, machine.needles + start_needle, stop_needle - start_needle + 1) == 0;
+    if (!success)
+    {
+        fprintf(stderr, "expected=%.*s\n", stop_needle - start_needle + 1, test_pattern + start_needle);
+        fprintf(stderr, "actual  =");
+        for (int i = start_needle; i <= stop_needle; i++)
+        {
+            fprintf(stderr, "%s%c\x1b[0m", test_pattern[i] != machine.needles[i] ? "\x1b[7m" : "", machine.needles[i]);
+        }
+        fprintf(stderr, "\n");
+    }
+    exit(success ? 0 : 1);
+}
+
 static void display() {
     fprintf(stderr, "S=[");
     for (int solenoid_index=0; solenoid_index<machine.num_solenoids;solenoid_index++) {
@@ -523,7 +556,7 @@ static void * avr_run_thread(void * param)
     memset(machine.needles, '.', machine.num_needles);
     machine.belt_phase_signal = 0;
     machine.carriage.direction = machine.start_side == LEFT ? RIGHTWARDS : LEFTWARDS;
-    machine.carriage.selected_needle = -MARGIN_NEEDLES - 1;
+    machine.carriage.selected_needle = machine.start_side == LEFT ? -MARGIN_NEEDLES - 1 : machine.num_needles + MARGIN_NEEDLES + 1;
     machine.dirty = 1;
 
 	while (*run && (state != cpu_Done) && (state != cpu_Crashed))
@@ -776,16 +809,9 @@ static void * avr_run_thread(void * param)
             }
 
             if (test_enabled) {
-                if (machine.carriage.position >= machine.num_needles + MARGIN_NEEDLES - 1 || machine.carriage.position <= -MARGIN_NEEDLES) {
-                    int success = memcmp(test_pattern, machine.needles, machine.num_needles) == 0;
-                    if (!success) {
-                        fprintf(stderr, "expected=%.*s\nactual  =", machine.num_needles, test_pattern);
-                        for (int i=0; i<machine.num_needles; i++) {
-                            fprintf(stderr, "%s%c\x1b[0m", test_pattern[i] != machine.needles[i] ? "\x1b[7m" : "", machine.needles[i]);
-                        }
-                        fprintf(stderr, "\n");
-                    }
-                    exit(success ? 0 : 1);
+                if ( (machine.start_side == LEFT && machine.carriage.selected_needle > stop_needle)
+                  || (machine.start_side == RIGHT && machine.carriage.selected_needle < start_needle) ) {
+                    check_pattern();
                 }
             }
 
@@ -900,7 +926,7 @@ static void slip_process(slipmsg_t *msg)
             if (test_enabled)
             {
                 uint8_t buf[5] = {
-                    reqStart, 0, strlen(test_pattern) - 1, 
+                    reqStart, start_needle, stop_needle, 
                     0x02 // 1 = continous reporting, 2 = enable hardware beep
                 };
                 buf[4] = CRC8(buf, 4);
@@ -998,6 +1024,27 @@ int main(int argc, char *argv[])
 
     parse_arguments(argc, argv);
 
+    if (machine.type == KH270) {
+        machine.num_needles = 112;
+        machine.num_solenoids = 12;
+        machine.carriage.type = KNIT270;
+    }
+
+    if (stop_needle < 0) {
+        stop_needle = machine.num_needles - 1;
+    }
+
+    assert(start_needle >= 0 && start_needle < machine.num_needles);
+    assert(stop_needle >= start_needle && stop_needle < machine.num_needles);
+
+    int pattern_src_len = strlen(pattern_src);
+    assert(pattern_src_len > 0);
+
+    memset(test_pattern, '.', sizeof(test_pattern) - 1);
+    for (int i=start_needle; i<=stop_needle; i++) {
+        test_pattern[i] = pattern_src[(i - start_needle) % pattern_src_len];
+    }
+
     if (!test_enabled) {
         printf (
             "---------------------------------------------------------\n"
@@ -1007,12 +1054,6 @@ int main(int argc, char *argv[])
             "- 'q' or ESC to quit\n"
             "----------------------------------------------------------\n"
         );
-    }
-
-    if (machine.type == KH270) {
-        machine.num_needles = 112;
-        machine.num_solenoids = 12;
-        machine.carriage.type = KNIT270;
     }
 
     // Set carriage position so that encoder phase is 0
