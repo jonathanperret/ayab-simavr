@@ -216,7 +216,6 @@ sim_setup_firmware(const char * filename, uint32_t loadBase,
 					"%s: Unable to load IHEX file %s\n", progname, filename);
 			exit(1);
 		}
-		printf("Loaded %d section(s) of ihex\n", cnt);
 
 		for (int ci = 0; ci < cnt; ci++) {
 			if (chunk[ci].baseaddr+loadBase < (1*1024*1024)) {
@@ -231,8 +230,6 @@ sim_setup_firmware(const char * filename, uint32_t loadBase,
 				fp->flash = chunk[ci].data;
 				fp->flashsize = chunk[ci].size;
 				fp->flashbase = chunk[ci].baseaddr;
-				printf("Load HEX flash %08x, %d at %08x\n",
-					   fp->flashbase, fp->flashsize, fp->flashbase);
 			} else if (chunk[ci].baseaddr >= AVR_SEGMENT_OFFSET_EEPROM ||
 					   (chunk[ci].baseaddr + loadBase) >=
 							AVR_SEGMENT_OFFSET_EEPROM) {
