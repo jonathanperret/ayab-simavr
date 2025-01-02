@@ -358,10 +358,47 @@ static void serial_inject(uint8_t b) {
     avr_raise_irq(serial_in_irq, b);
 }
 
+size_t slip_decode(const uint8_t *input, size_t input_len, uint8_t *output, size_t output_size) {
+    size_t output_len = 0;
+    while (input_len-- > 0 && ++output_len < output_size)
+    {
+        if (*input == 0xDB && input_len > 0) {
+            input++;
+            input_len--;
+            *output++ = *input == 0xDC ? 0xC0 : (*input == 0xDD ? 0xDB : *input);
+        } else {
+            *output++ = *input;
+        }
+        input++;
+    }
+    return output_len;
+}
+
+size_t slip_encode(const uint8_t *input, size_t input_len, uint8_t *output, size_t output_size) {
+    size_t output_len = 0;
+    while (input_len-- > 0 && ++output_len < output_size) {
+       if (*input == 0xC0 && ++output_len < output_size) {
+           *output++ = 0xDB;
+           *output++ = 0xDC;
+       } else if (*input == 0xDB && ++output_len < output_size) {
+           *output++ = 0xDB;
+           *output++ = 0xDD;
+       } else {
+           *output++ = *input;
+       }
+       input++;
+   }
+   return output_len;
+}
+
 static void slip_inject(const uint8_t *msg, int len) {
+    size_t encoded_size = 2 * len;
+    uint8_t encoded[encoded_size];
+    size_t encoded_len = slip_encode(msg, len, encoded, encoded_size);
     serial_inject(0xc0);
-    for (int i=0; i<len; i++) {
-        serial_inject(msg[i]);
+    for (int i = 0; i < encoded_len; i++)
+    {
+        serial_inject(encoded[i]);
     }
     serial_inject(0xc0);
 }
@@ -782,19 +819,19 @@ static void slip_history_add(char c) {
 	shield.slip_history[sizeof(shield.slip_history) - 1] = c;
 }
 
-static void slip_record(slipmsg_t *msg) {
-	slip_history_add(msg->prefix);
+static void slip_record(char prefix, const uint8_t *decoded, size_t decoded_len) {
+	slip_history_add(prefix);
 	slip_history_add(' ');
-	for (int i = 0; i < msg->len; i++)
+	for (int i = 0; i < decoded_len; i++)
 	{
-		if (isprint(msg->buf[i]))
+		if (isprint(decoded[i]))
 		{
-			slip_history_add(msg->buf[i]);
+			slip_history_add(decoded[i]);
 		}
 		else
 		{
 			char s[5];
-			snprintf(s, sizeof(s), "\\%02x", msg->buf[i]);
+			snprintf(s, sizeof(s), "\\%02x", decoded[i]);
 			slip_history_add(s[0]);
 			slip_history_add(s[1]);
 			slip_history_add(s[2]);
@@ -834,10 +871,16 @@ static uint32_t delta_real() {
 static void slip_process(slipmsg_t *msg)
 {
     machine.dirty = 1;
-    slip_record(msg);
+    size_t decoded_size = 2 * msg->len;
+    uint8_t decoded[decoded_size];
+    size_t decoded_len = slip_decode(msg->buf, msg->len, decoded, decoded_size);
+    if (decoded_len == 0) {
+        return;
+    }
+    slip_record(msg->prefix, decoded, decoded_len);
     if (test_enabled)
     {
-        switch (msg->buf[0])
+        switch (decoded[0])
         {
         case reqInfo:
             TRACE("reqInfo");
@@ -850,13 +893,16 @@ static void slip_process(slipmsg_t *msg)
             break;
         case cnfInit:
             TRACE("cnfInit");
-            assert(msg->buf[1] == 0);
+            assert(decoded_len > 1 && decoded[1] == 0);
             break;
         case indState:
             TRACE("indState");
             if (test_enabled)
             {
-                uint8_t buf[5] = { reqStart, 0, strlen(test_pattern) - 1, 0 };
+                uint8_t buf[5] = {
+                    reqStart, 0, strlen(test_pattern) - 1, 
+                    0x02 // 1 = continous reporting, 2 = enable hardware beep
+                };
                 buf[4] = CRC8(buf, 4);
                 slip_inject(buf, sizeof(buf));
             }
@@ -866,13 +912,14 @@ static void slip_process(slipmsg_t *msg)
             break;
         case cnfStart:
             TRACE("cnfStart");
-            assert(msg->buf[1] == 0);
+            assert(decoded_len > 1 && decoded[1] == 0);
             break;
         case reqLine:
-            TRACE("reqLine(%d)", msg->buf[1]);
+            TRACE("reqLine(%d)", decoded[1]);
+            assert(decoded_len > 1);
             if (test_enabled)
             {
-                int requestedLine = msg->buf[1];
+                int requestedLine = decoded[1];
                 int patlen = strlen(test_pattern);
                 int bufLen = 4 + (patlen + 7) / 8 + 1;
                 uint8_t buf[bufLen];
@@ -890,13 +937,14 @@ static void slip_process(slipmsg_t *msg)
             }
             break;
         case cnfLine:
-            TRACE("cnfLine(%d)", msg->buf[1]);
+            assert(decoded_len > 1);
+            TRACE("cnfLine(%d)", decoded[1]);
             break;
         case 0xff:
-            TRACE("%.*s", msg->len - 1, msg->buf + 1);
+            TRACE("%.*s", (int)decoded_len - 1, decoded + 1);
             break;
         default:
-            TRACE("msg %02x", msg->buf[0]);
+            TRACE("msg %02x", decoded[0]);
         }
     }
 }
