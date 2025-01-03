@@ -58,6 +58,7 @@ int trace_pc = 0;
 int trace_machine = 0;
 int vcd_enabled = 0;
 int quiet = 0;
+int msgtrace_enabled = 0;
 
 uart_pty_t uart_pty;
 
@@ -169,6 +170,7 @@ display_usage(
      "       [--pattern <pattern>]      Test pattern (default=none)\n"
      "       [--start-needle <int>]     Start needle (default=0)\n"
      "       [--stop-needle <int>]      Stop needle (default=last)\n"
+     "       [--msg-trace]              Trace messages (default=no)\n"
      "       [--quiet]                  Quiet mode (default=no)\n"
 	 "       <firmware>                 HEX or ELF file to load (can include debugging syms)\n"
      "\n");
@@ -299,6 +301,8 @@ parse_arguments(int argc, char *argv[])
             }
 		} else if (!strcmp(argv[pi], "--quiet")) {
             quiet = 1;
+		} else if (!strcmp(argv[pi], "--msg-trace")) {
+            msgtrace_enabled = 1;
 		} else if (argv[pi][0] != '-') {
             uint32_t loadBase = AVR_SEGMENT_OFFSET_FLASH;
 			sim_setup_firmware(argv[pi], loadBase, &firmware, argv[0]);
@@ -425,6 +429,7 @@ static void check_pattern()
     int success = memcmp(test_pattern + start_needle, machine.needles + start_needle, stop_needle - start_needle + 1) == 0;
     if (!success)
     {
+        fprintf(stderr, "FAIL on pass %d (going %s)\n", test_step, machine.carriage.direction == LEFTWARDS ? "left" : "right");
         fprintf(stderr, "expected=%.*s\n", stop_needle - start_needle + 1, test_pattern + start_needle);
         fprintf(stderr, "actual  =");
         for (int i = start_needle; i <= stop_needle; i++)
@@ -432,8 +437,8 @@ static void check_pattern()
             fprintf(stderr, "%s%c\x1b[0m", test_pattern[i] != machine.needles[i] ? "\x1b[7m" : "", machine.needles[i]);
         }
         fprintf(stderr, "\n");
+        exit(1);
     }
-    exit(success ? 0 : 1);
 }
 
 static void display() {
@@ -586,6 +591,10 @@ static void * avr_run_thread(void * param)
                     }
                     case 1:
                         event = machine.start_side == LEFT ? CARRIAGE_RIGHT : CARRIAGE_LEFT;
+                        event_available = 1;
+                        break;
+                    case 2:
+                        event = machine.start_side == LEFT ? CARRIAGE_LEFT : CARRIAGE_RIGHT;
                         event_available = 1;
                         break;
                     }
@@ -809,9 +818,17 @@ static void * avr_run_thread(void * param)
             }
 
             if (test_enabled) {
-                if ( (machine.start_side == LEFT && machine.carriage.selected_needle > stop_needle)
-                  || (machine.start_side == RIGHT && machine.carriage.selected_needle < start_needle) ) {
+                if ((machine.carriage.direction == RIGHTWARDS && machine.carriage.selected_needle > stop_needle + (machine.carriage.type == GARTER ? 12 : 0)) ||
+                    (machine.carriage.direction == LEFTWARDS && machine.carriage.selected_needle < start_needle - (machine.carriage.type == GARTER ? 12 : 0))) {
                     check_pattern();
+                    if (test_step == 1)
+                    {
+                        test_step = 2;
+                    }
+                    else
+                    {
+                        exit(0);
+                    }
                 }
             }
 
@@ -866,7 +883,6 @@ static void slip_record(char prefix, const uint8_t *decoded, size_t decoded_len)
 	slip_history_add(' ');
 }
 
-#if 0
 static uint64_t real_us() {
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC_RAW, &start);
@@ -889,10 +905,7 @@ static uint32_t delta_real() {
     return delta;
 }
 
-#define TRACE(format, ...) fprintf(stderr, "%+10d %+10d " format "\n", delta_avr(), delta_real(), ## __VA_ARGS__)
-#else
-#define TRACE(format, ...) {}
-#endif
+#define TRACE(format, ...) if (msgtrace_enabled) fprintf(stderr, "%+10d %+10d " format "\n", delta_avr(), delta_real(), ## __VA_ARGS__)
 
 static void slip_process(slipmsg_t *msg)
 {
@@ -923,7 +936,7 @@ static void slip_process(slipmsg_t *msg)
             break;
         case indState:
             TRACE("indState");
-            if (test_enabled)
+            if (test_enabled && test_step == 1)
             {
                 uint8_t buf[5] = {
                     reqStart, start_needle, stop_needle, 
@@ -937,7 +950,7 @@ static void slip_process(slipmsg_t *msg)
             TRACE("reqStart");
             break;
         case cnfStart:
-            TRACE("cnfStart");
+            TRACE("cnfStart(%d)", decoded[1]);
             assert(decoded_len > 1 && decoded[1] == 0);
             break;
         case reqLine:
