@@ -1050,12 +1050,14 @@ int main(int argc, char *argv[])
     assert(start_needle >= 0 && start_needle < machine.num_needles);
     assert(stop_needle >= start_needle && stop_needle < machine.num_needles);
 
-    int pattern_src_len = strlen(pattern_src);
-    assert(pattern_src_len > 0);
+    if (test_enabled) {
+        int pattern_src_len = strlen(pattern_src);
+        assert(pattern_src_len > 0);
 
-    memset(test_pattern, '.', sizeof(test_pattern) - 1);
-    for (int i=start_needle; i<=stop_needle; i++) {
-        test_pattern[i] = pattern_src[(i - start_needle) % pattern_src_len];
+        memset(test_pattern, '.', sizeof(test_pattern) - 1);
+        for (int i=start_needle; i<=stop_needle; i++) {
+            test_pattern[i] = pattern_src[(i - start_needle) % pattern_src_len];
+        }
     }
 
     if (!test_enabled) {
@@ -1157,6 +1159,12 @@ int main(int argc, char *argv[])
                             slip_add_byte, &shield.slip_msg_in);
 
     if (test_enabled) {
+        // disable the default stdio dump of avr_uart
+        uint32_t f = 0;
+        avr_ioctl(avr, AVR_IOCTL_UART_GET_FLAGS(uart), &f);
+        f &= ~AVR_UART_FLAG_STDIO;
+        avr_ioctl(avr, AVR_IOCTL_UART_SET_FLAGS(uart), &f);
+
         serial_in_irq = avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ(uart), UART_IRQ_INPUT);
     } else {
         uart_pty_init(avr, &uart_pty);
