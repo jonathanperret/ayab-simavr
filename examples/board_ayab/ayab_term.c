@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <termios.h>
 #include <stdio.h>
@@ -105,7 +106,7 @@ void term_read()
     char buf[10];
     int nread = read(STDIN_FILENO, buf, 10);
     struct timespec now;
-    timespec_get(&now, TIME_UTC);
+    clock_gettime(CLOCK_MONOTONIC, &now);
     if (nread > 0)
     {
         key_down = 1;

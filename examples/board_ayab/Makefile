@@ -27,7 +27,12 @@ IPATH += ${simavr}/simavr/sim
 VPATH = .
 VPATH += ${simavr}/examples/parts
 #CFLAGS += -DAVR_STACK_WATCH=1 -DCONFIG_SIMAVR_TRACE=1
-LDFLAGS += -lpthread
+LD_LIBELF	:= ${shell pkg-config --libs libelf }
+LDFLAGS += -lpthread -lutil
+
+ifeq (${shell uname}, Linux)
+LDFLAGS += -static
+endif
 
 all: obj ${target} 
 

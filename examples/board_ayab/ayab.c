@@ -21,6 +21,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <libgen.h>
 #include <string.h>
 #include <ctype.h>
@@ -294,7 +295,8 @@ parse_arguments(int argc, char *argv[])
             }
 		} else if (!strcmp(argv[pi], "--pattern")) {
 			if (pi < argc-1) {
-                strncpy(pattern_src, argv[++pi], sizeof(pattern_src));
+                strncpy(pattern_src, argv[++pi], sizeof(pattern_src) - 1);
+                pattern_src[sizeof(pattern_src) - 1] = '\0';
                 test_enabled = 1;
             } else {
 				display_usage(basename(argv[0]));
@@ -885,7 +887,7 @@ static void slip_record(char prefix, const uint8_t *decoded, size_t decoded_len)
 
 static uint64_t real_us() {
     struct timespec start;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    clock_gettime(CLOCK_MONOTONIC, &start);
     return start.tv_sec * 1000000 + start.tv_nsec / 1000;
 }
 
