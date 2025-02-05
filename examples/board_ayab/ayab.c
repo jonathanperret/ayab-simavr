@@ -153,29 +153,43 @@ display_usage(
 {
 	printf("Usage: %s [...] <firmware>\n", app);
 	printf(
-	 "       [--help|-h|-?]             Display this usage message and exit\n"
-	 "       [--list-cores]             List all supported AVR cores and exit\n"
-	 "       [-v]                       Raise verbosity level (can be passed more than once)\n"
-	 "       [--freq|-f <freq>]         Sets the frequency for an .hex firmware (default 16000000)\n"
-	 "       [--mcu|-m <device>]        Sets the MCU type for an .hex firmware (default atmega328)\n"
-	 "       [--gdb|-g [<port>]]        Listen for gdb connection on <port> (default 1234)\n"
-	 "       [--output|-o <file>]       VCD file to save signal traces\n"
-	 "       [--start-vcd|-s            Start VCD output from reset\n"
-	 "       [--pc-trace|-p             Add PC to VCD traces\n"
-     "       [--machine-trace]          Add Machine states to VCD traces\n"
-     "       [--machine <machine>]      Select KH910/KH930/KH270 machine (default=KH910)\n"
-     "       [--carriage <carriage>]    Select K/L/G carriage (default=K)\n"
-     "       [--beltphase <phase>]      Select Regular/Shifted (default=Regular)\n"
-     "       [--startside <side>]       Select Left/Right side to start (default=Left)\n"
-     "       [--sensor-radius <radius>] Sensor radius (default=1)\n"
-     "       [--pattern <pattern>]      Test pattern (default=none)\n"
-     "       [--start-needle <int>]     Start needle (default=0)\n"
-     "       [--stop-needle <int>]      Stop needle (default=last)\n"
-     "       [--msg-trace]              Trace messages (default=no)\n"
-     "       [--quiet]                  Quiet mode (default=no)\n"
-	 "       <firmware>                 HEX or ELF file to load (can include debugging syms)\n"
+	 "       [--help|-h|-?]               Display this usage message and exit\n"
+	 "       [--list-cores]               List all supported AVR cores and exit\n"
+	 "       [-v]                         Raise verbosity level (can be passed more than once)\n"
+	 "       [--freq|-f <freq>]           Sets the frequency for an .hex firmware (default 16000000)\n"
+	 "       [--mcu|-m <device>]          Sets the MCU type for an .hex firmware (default atmega328)\n"
+	 "       [--gdb|-g [<port>]]          Listen for gdb connection on <port> (default 1234)\n"
+	 "       [--output|-o <file>]         VCD file to save signal traces\n"
+	 "       [--start-vcd|-s              Start VCD output from reset\n"
+	 "       [--pc-trace|-p               Add PC to VCD traces\n"
+     "       [--machine-trace]            Add Machine states to VCD traces\n"
+     "       [--machine <machine>]        Select KH910/KH930/KH270 machine (default=KH910)\n"
+     "       [--carriage <carriage>]      Select K/L/G carriage (default=K)\n"
+     "       [--beltphase <phase>]        Select Regular/Shifted (default=Regular)\n"
+     "       [--startside <side>]         Select Left/Right side to start (default=Left)\n"
+     "       [--left-sensor <start,end>]  Positions where left sensor is triggered (default -1,0)\n"
+     "       [--right-sensor <start,end>] Positions where left sensor is triggered (default 199,200)\n"
+     "       [--pattern <pattern>]        Test pattern (default=none)\n"
+     "       [--start-needle <int>]       Start needle (default=0)\n"
+     "       [--stop-needle <int>]        Stop needle (default=last)\n"
+     "       [--msg-trace]                Trace messages (default=no)\n"
+     "       [--quiet]                    Quiet mode (default=no)\n"
+	 "       <firmware>                   HEX or ELF file to load (can include debugging syms)\n"
      "\n");
 	exit(1);
+}
+
+int parse_int_pair(const char *str, int *first, int *second) {
+    *first = atoi(str);
+    
+    const char *comma = strchr(str, ',');
+    if (!comma) {
+        return 0;
+    }
+    
+    *second = atoi(comma + 1);
+    
+    return 1;
 }
 
 void
@@ -263,10 +277,12 @@ parse_arguments(int argc, char *argv[])
             } else {
 				display_usage(basename(argv[0]));
             }
-		} else if (!strcmp(argv[pi], "--sensor-radius")) {
-			if (pi < argc-1) {
-				machine.sensor_radius = atoi(argv[++pi]);
-			} else {
+		} else if (!strcmp(argv[pi], "--left-sensor")) {
+			if (!(pi < argc-1 && parse_int_pair(argv[++pi], &machine.left_sensor_start, &machine.left_sensor_end))) {
+				display_usage(basename(argv[0]));
+			}
+		} else if (!strcmp(argv[pi], "--right-sensor")) {
+			if (!(pi < argc-1 && parse_int_pair(argv[++pi], &machine.right_sensor_start, &machine.right_sensor_end))) {
 				display_usage(basename(argv[0]));
 			}
 		} else if (!strcmp(argv[pi], "--start-needle")) {
@@ -662,7 +678,7 @@ static void * avr_run_thread(void * param)
                     uint16_t solenoid_mask = 1 << solenoid_index;
                     uint16_t solenoid_state = machine.solenoid_states & solenoid_mask;
                     // Solenoid 0 is at angle 0 (side-pushing) when encoder_phase is 0
-                    // -> angle from down-pusher is 32 (KH9xx) or 24 (KH970) (half period).
+                    // -> angle from down-pusher is 32 (KH9xx) or 24 (KH270) (half period).
                     // Solenoid 1 is at angle 0 (side-pushing) when encoder_phase is 4.
                     int angle_from_pusher = abs(((int)machine.encoder_phase + (machine.num_solenoids - solenoid_index) * 4)
                                                  % (machine.num_solenoids * 4)
@@ -683,9 +699,9 @@ static void * avr_run_thread(void * param)
                 switch (machine.carriage.type) {
                     case KNIT:
                         // Handle hall sensors
-                        if (abs(machine.carriage.position) <= machine.sensor_radius) {
+                        if (machine.carriage.position >= machine.left_sensor_start && machine.carriage.position <= machine.left_sensor_end) {
                             machine.hall_left = 2200; //TBC North
-                        } else if (abs(machine.carriage.position - (machine.num_needles - 1)) <= machine.sensor_radius) {
+                        } else if (machine.carriage.position >= machine.right_sensor_start && machine.carriage.position <= machine.right_sensor_end) {
                             machine.hall_right = 2200; //TBC North
                             if(machine.type == KH910) { // Shield error
                                 machine.hall_right = 0; // Digital low
@@ -698,9 +714,9 @@ static void * avr_run_thread(void * param)
                         }
                         break;
                     case LACE:
-                        if (abs(machine.carriage.position) <= machine.sensor_radius) {
+                        if (machine.carriage.position >= machine.left_sensor_start && machine.carriage.position <= machine.left_sensor_end) {
                             machine.hall_left = 100; //TBC South
-                        } else if (abs(machine.carriage.position - (machine.num_needles - 1)) <= machine.sensor_radius) {
+                        } else if (machine.carriage.position >= machine.right_sensor_start && machine.carriage.position <= machine.right_sensor_end) {
                             machine.hall_right = 100; //TBC South
                             if(machine.type == KH910) { // Shield error
                                 machine.hall_right = 1650; // HighZ
@@ -743,17 +759,17 @@ static void * avr_run_thread(void * param)
                         select_offset = 0;
                         break;
                     case KNIT270:
-                        switch (machine.carriage.position) {
-                            case -3:
-                            case  3:
-                                machine.hall_left = 2200; //TBC North
-                                break;
-                            case 111 - 3:
-                            case 111 + 3:
-                                machine.hall_right = 2200; //TBC North
-                                break;
-                            default:
-                                break;
+                        // Handle hall sensors
+                        for (int magnet_offset = -3; magnet_offset <= 3; magnet_offset += 6)
+                        {
+                            if (machine.carriage.position + magnet_offset >= machine.left_sensor_start && machine.carriage.position + magnet_offset <= machine.left_sensor_end)
+                            {
+                                machine.hall_left = 2200; // TBC North
+                            }
+                            else if (machine.carriage.position + magnet_offset >= machine.right_sensor_start && machine.carriage.position + magnet_offset <= machine.right_sensor_end)
+                            {
+                                machine.hall_right = 2200; // TBC North
+                            }
                         }
                         // Handle solenoids
                         select_offset = 15;
@@ -1032,7 +1048,10 @@ int main(int argc, char *argv[])
     machine.num_solenoids = 16;
     machine.carriage.type = KNIT;
     machine.belt_phase = REGULAR;
-    machine.sensor_radius = 1;
+    machine.left_sensor_start = INT32_MIN;
+    machine.left_sensor_end = 0;
+    machine.right_sensor_start = INT32_MAX;
+    machine.right_sensor_end = 200;
 
     strncpy(firmware.mmcu, "atmega328", sizeof(firmware.mmcu));
     firmware.frequency = 16000000;
@@ -1044,6 +1063,20 @@ int main(int argc, char *argv[])
         machine.num_solenoids = 12;
         machine.carriage.type = KNIT270;
     }
+
+    if (machine.left_sensor_start == INT32_MIN) {
+        machine.left_sensor_end = machine.type == KH270 ? -3 : 0;
+        machine.left_sensor_start = machine.left_sensor_end - 1;
+    }
+
+    if (machine.right_sensor_start == INT32_MAX) {
+        machine.right_sensor_start = machine.type == KH270 ? 114 : 199;
+        machine.right_sensor_end = machine.right_sensor_start + 1;
+    }
+
+    assert(machine.left_sensor_start <= machine.left_sensor_end);
+    assert(machine.left_sensor_end < machine.right_sensor_start);
+    assert(machine.right_sensor_start <= machine.right_sensor_end);
 
     if (stop_needle < 0) {
         stop_needle = machine.num_needles - 1;

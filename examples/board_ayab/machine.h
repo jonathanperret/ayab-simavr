@@ -26,7 +26,10 @@ typedef struct {
 typedef struct {
     enum machine_type type;
     enum side start_side;
-    int sensor_radius;
+    int left_sensor_start;
+    int left_sensor_end;
+    int right_sensor_start;
+    int right_sensor_end;
     int num_needles;
     int num_solenoids;
     int belt_phase;
