@@ -63,6 +63,12 @@ int msgtrace_enabled = 0;
 
 uart_pty_t uart_pty;
 
+typedef enum {
+    TEST_STEP_INIT,
+    TEST_STEP_WAITING_FOR_INDSTATE,
+    TEST_STEP_KNITTING,
+} TestStep;
+
 machine_t machine;
 shield_t shield;
 int start_needle = 0;
@@ -70,7 +76,8 @@ int stop_needle = -1;
 char pattern_src[201] = "";
 char test_pattern[201] = "";
 int test_enabled = 0;
-int test_step = 0;
+TestStep test_step = TEST_STEP_INIT;
+int test_row = 0;
 int test_delay = 0;
 button_t encoder_v1, encoder_v2;
 button_t encoder_beltPhase;
@@ -447,7 +454,7 @@ static void check_pattern()
     int success = memcmp(test_pattern + start_needle, machine.needles + start_needle, stop_needle - start_needle + 1) == 0;
     if (!success)
     {
-        fprintf(stderr, "FAIL on pass %d (going %s)\n", test_step, machine.carriage.direction == LEFTWARDS ? "left" : "right");
+        fprintf(stderr, "FAIL on pass %d (going %s)\n", test_row, machine.carriage.direction == LEFTWARDS ? "left" : "right");
         fprintf(stderr, "expected=%.*s\n", stop_needle - start_needle + 1, test_pattern + start_needle);
         fprintf(stderr, "actual  =");
         for (int i = start_needle; i <= stop_needle; i++)
@@ -599,20 +606,17 @@ static void * avr_run_thread(void * param)
                 else
                 {
                     switch(test_step) {
-                    case 0:
+                    case TEST_STEP_INIT:
                     {
                         uint8_t buf[3] = {reqInit, machine.type };
                         buf[2] = CRC8(buf, 2);
                         slip_inject(buf, sizeof(buf));
-                        test_step = 1;
+                        test_step = TEST_STEP_WAITING_FOR_INDSTATE;
                         break;
                     }
-                    case 1:
-                        event = machine.start_side == LEFT ? CARRIAGE_RIGHT : CARRIAGE_LEFT;
-                        event_available = 1;
-                        break;
-                    case 2:
-                        event = machine.start_side == LEFT ? CARRIAGE_LEFT : CARRIAGE_RIGHT;
+                    case TEST_STEP_WAITING_FOR_INDSTATE:
+                    case TEST_STEP_KNITTING:
+                        event = ((machine.start_side == LEFT) ^ (test_row % 2 == 1)) ? CARRIAGE_RIGHT : CARRIAGE_LEFT;
                         event_available = 1;
                         break;
                     }
@@ -839,9 +843,9 @@ static void * avr_run_thread(void * param)
                 if ((machine.carriage.direction == RIGHTWARDS && machine.carriage.selected_needle > stop_needle + (machine.carriage.type == GARTER ? 12 : 0)) ||
                     (machine.carriage.direction == LEFTWARDS && machine.carriage.selected_needle < start_needle - (machine.carriage.type == GARTER ? 12 : 0))) {
                     check_pattern();
-                    if (test_step == 1)
+                    if (test_step == TEST_STEP_KNITTING && test_row == 0)
                     {
-                        test_step = 2;
+                        test_row++;
                     }
                     else
                     {
@@ -954,7 +958,7 @@ static void slip_process(slipmsg_t *msg)
             break;
         case indState:
             TRACE("indState");
-            if (test_enabled && test_step == 1)
+            if (test_enabled && test_step == TEST_STEP_WAITING_FOR_INDSTATE)
             {
                 uint8_t buf[5] = {
                     reqStart, start_needle, stop_needle, 
@@ -962,6 +966,7 @@ static void slip_process(slipmsg_t *msg)
                 };
                 buf[4] = CRC8(buf, 4);
                 slip_inject(buf, sizeof(buf));
+                test_step = TEST_STEP_KNITTING;
             }
             break;
         case reqStart:
